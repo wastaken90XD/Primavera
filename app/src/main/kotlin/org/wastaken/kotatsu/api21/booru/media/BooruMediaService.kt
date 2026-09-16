@@ -105,6 +105,10 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	private var boundTargetWidth = 0
 	private var boundTargetHeight = 0
 	private var videoLooping = false
+	private var pendingResumeMs = 0
+	private var hibernatedItemId: String? = null
+	private var hibernatedResumeMs = 0
+	private var hibernateTask: Runnable? = null
 	private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 	private var prepareWatchdog: Runnable? = null
 	private var gifBytesCache: Pair<String, ByteArray>? = null
@@ -185,7 +189,24 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 			else -> Unit
 		}
 		ensureForeground()
-		return START_STICKY
+		// NOT_STICKY (NewPipe PlayerService parity): the queue is persisted, so
+		// after LMK kills us an empty resurrection just wastes RAM on this device
+		return START_NOT_STICKY
+	}
+
+	/**
+	 * NewPipe teardown parity: when the app task is swiped away there is no
+	 * reader screen left for a video engine to serve. The one exception is the
+	 * floating window - it IS a visible surface the user deliberately keeps,
+	 * so "reader + player active at the same time" stays alive.
+	 */
+	override fun onTaskRemoved(rootIntent: Intent?) {
+		if (!isFloating) {
+			hibernateEngine()
+			ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+			stopSelf()
+		}
+		super.onTaskRemoved(rootIntent)
 	}
 
 	override fun onDestroy() {
@@ -276,6 +297,15 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 			}
 			return
 		}
+		if (mediaPlayer == null) {
+			// hibernated engine (NewPipe lazy-player pattern): the touch that
+			// brings the UI back resurrects playback from the saved position
+			val item = currentItem
+			if (item?.mediaType == BooruMediaType.VIDEO && item.id == hibernatedItemId) {
+				playIndex(queue.index)
+			}
+			return
+		}
 		val player = mediaPlayer ?: return
 		if (player.isPlaying) {
 			player.pause()
@@ -350,6 +380,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		boundTargetWidth = width
 		boundTargetHeight = height
 		runCatching { mediaPlayer?.setSurface(surface) }
+		if (surface != null) cancelHibernate() else scheduleHibernateIfIdle()
 	}
 
 	/**
@@ -364,6 +395,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		boundTargetWidth = width
 		boundTargetHeight = height
 		vlcPlayer?.setRenderTarget(surfaceTexture, width, height)
+		if (surfaceTexture != null) cancelHibernate() else scheduleHibernateIfIdle()
 	}
 
 	/** GIF bytes for the view layer, cached for one URL; full headers, explicit load. */
@@ -377,7 +409,9 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 			if (!response.isSuccessful) throw IOException("HTTP ${response.code} loading GIF")
 			response.body?.bytes() ?: throw IOException("Empty GIF body")
 		}
-		gifBytesCache = item.url to bytes
+		// capped: the cache exists for rotation survival, not for holding large
+		// animations resident on a low-RAM device (Movie keeps its own copy)
+		gifBytesCache = if (bytes.size <= GIF_CACHE_MAX_BYTES) item.url to bytes else null
 		return bytes
 	}
 
@@ -393,8 +427,15 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	// region video engine
 
 	private fun openVideo(item: BooruMediaItem) {
-		releaseVideo()
+		val engine = settings.booruVideoEngine
+		// libVLC: stop-only so the instance survives across queue items;
+		// system engine / explicit teardowns always get the full release
+		releaseVideo(releaseVlc = engine != BooruVideoEngine.LIBVLC)
 		setState(PlaybackState.PREPARING)
+		// consume a hibernation resume point before it can leak across items
+		pendingResumeMs = if (hibernatedItemId == item.id) hibernatedResumeMs else 0
+		hibernatedItemId = null
+		hibernatedResumeMs = 0
 		val headers = BooruStreamHeaders.forStream(mangaRepositoryFactory, mangaLoaderContext, item.source, item.url)
 		val streamProxy = VideoStreamProxy(okHttpClient)
 		val localUrl = try {
@@ -407,7 +448,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		}
 		proxy = streamProxy
 		videoLooping = settings.isMediaVideoLoop || queue.repeatMode == RepeatMode.ONE
-		when (settings.booruVideoEngine) {
+		when (engine) {
 			BooruVideoEngine.LIBVLC -> openVideoVlc(item, localUrl)
 			BooruVideoEngine.SYSTEM -> openVideoSystem(item, localUrl)
 		}
@@ -420,7 +461,10 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	 * loop/repeat logic lives here instead of in the platform player.
 	 */
 	private fun openVideoVlc(item: BooruMediaItem, localUrl: String) {
-		val vlc = try {
+		// vlc-android VLCInstance pattern: ONE engine per service lifetime,
+		// reused across items; created lazily on the first play touch only
+		val existing = vlcPlayer
+		val vlc = existing ?: try {
 			BooruVlcPlayer(this)
 		} catch (e: Exception) {
 			// native libVLC init failed (e.g. OOM unpacking native libs on a
@@ -428,48 +472,59 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 			openVideoSystem(item, localUrl)
 			return
 		}
-		vlcPlayer = vlc
-		vlc.callback = object : BooruVlcPlayer.Callback {
-			override fun onPlaying(videoWidth: Int, videoHeight: Int) {
-				if (vlcPlayer !== vlc) return
-				if (videoWidth > 0 && videoHeight > 0) {
-					this@BooruMediaService.videoWidth = videoWidth
-					this@BooruMediaService.videoHeight = videoHeight
-					onVideoSizeChanged?.invoke(videoWidth, videoHeight)
-				}
-				runCatching { vlc.setSpeed(speed) }
-				requestAudioFocus()
-				setState(PlaybackState.PLAYING)
-			}
+		if (existing == null) {
+			vlcPlayer = vlc
+			vlc.callback = object : BooruVlcPlayer.Callback {
 
-			override fun onBuffering(percent: Float) {
-				if (vlcPlayer !== vlc) return
-				onBufferingChange?.invoke(percent < 100f)
-			}
+				// every handler reads service state at fire time, never a
+				// captured item: one callback now outlives many play() calls
+				private fun live(active: BooruVlcPlayer): Boolean = vlcPlayer === active
 
-			override fun onEncounteredError() {
-				if (vlcPlayer !== vlc) return
-				releaseVideo()
-				setState(PlaybackState.IDLE)
-				notifyError(item, 0, 0)
-			}
-
-			override fun onEndReached() {
-				if (vlcPlayer !== vlc) return
-				if (videoLooping) {
-					runCatching {
-						vlc.seekTo(0)
-						vlc.resume()
+				override fun onPlaying(videoWidth: Int, videoHeight: Int) {
+					if (!live(vlc)) return
+					if (videoWidth > 0 && videoHeight > 0) {
+						this@BooruMediaService.videoWidth = videoWidth
+						this@BooruMediaService.videoHeight = videoHeight
+						onVideoSizeChanged?.invoke(videoWidth, videoHeight)
 					}
-				} else {
-					val next = queue.nextIndex()
-					if (next >= 0) playIndex(next) else setState(PlaybackState.IDLE)
+					runCatching { vlc.setSpeed(speed) }
+					val resumeMs = pendingResumeMs
+					pendingResumeMs = 0
+					if (resumeMs > 0) runCatching { vlc.seekTo(resumeMs.toLong()) }
+					requestAudioFocus()
+					setState(PlaybackState.PLAYING)
 				}
-			}
 
-			override fun onTimeChanged(positionMs: Long) {
-				if (vlcPlayer !== vlc) return
-				onPlaybackProgress?.invoke(positionMs.toInt(), vlc.length.toInt())
+				override fun onBuffering(percent: Float) {
+					if (!live(vlc)) return
+					onBufferingChange?.invoke(percent < 100f)
+				}
+
+				override fun onEncounteredError() {
+					if (!live(vlc)) return
+					val failedItem = currentItem
+					releaseVideo()
+					setState(PlaybackState.IDLE)
+					notifyError(failedItem, 0, 0)
+				}
+
+				override fun onEndReached() {
+					if (!live(vlc)) return
+					if (videoLooping) {
+						runCatching {
+							vlc.seekTo(0)
+							vlc.resume()
+						}
+					} else {
+						val next = queue.nextIndex()
+						if (next >= 0) playIndex(next) else setState(PlaybackState.IDLE)
+					}
+				}
+
+				override fun onTimeChanged(positionMs: Long) {
+					if (!live(vlc)) return
+					onPlaybackProgress?.invoke(positionMs.toInt(), vlc.length.toInt())
+				}
 			}
 		}
 		// a texture that raced in during proxy start is remembered; replay it so
@@ -498,6 +553,9 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 				runCatching { mp.playbackParams = mp.playbackParams.setSpeed(speed) }
 			}
 			runCatching { mp.isLooping = videoLooping }
+			val resumeMs = pendingResumeMs
+			pendingResumeMs = 0
+			if (resumeMs > 0) runCatching { mp.seekTo(resumeMs) }
 			requestAudioFocus()
 			mp.start()
 			setState(PlaybackState.PLAYING)
@@ -561,6 +619,43 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		prepareWatchdog = null
 	}
 
+	// region engine hibernation
+	//
+	// NewPipe PlayerService model: the service shell (queue + notification) is
+	// cheap, the video engine is not. While the user is only browsing/queueing
+	// there must be no decoder, demuxer or proxy resident in RAM; the engine
+	// materializes again on the next play touch. A grace delay covers activity
+	// rotation and the floating <-> full-screen handoff, both of which detach
+	// every surface for a moment by design.
+
+	private fun scheduleHibernateIfIdle() {
+		cancelHibernate()
+		if (isVideoPlaying() || playbackState == PlaybackState.PREPARING) return
+		if (boundSurface != null || boundSurfaceTexture != null) return
+		if (vlcPlayer == null && mediaPlayer == null) return
+		val task = Runnable { hibernateEngine() }
+		hibernateTask = task
+		handler.postDelayed(task, HIBERNATE_DELAY_MS)
+	}
+
+	private fun cancelHibernate() {
+		hibernateTask?.let { handler.removeCallbacks(it) }
+		hibernateTask = null
+	}
+
+	private fun hibernateEngine() {
+		hibernateTask = null
+		val item = currentItem
+		if (item != null && item.mediaType == BooruMediaType.VIDEO) {
+			hibernatedItemId = item.id
+			hibernatedResumeMs = videoPosition()
+		}
+		releaseVideo(releaseVlc = true)
+		setState(PlaybackState.IDLE)
+	}
+
+	// endregion
+
 	private fun autoAdvance() {
 		when (queue.repeatMode) {
 			RepeatMode.ONE -> {
@@ -573,10 +668,20 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		}
 	}
 
-	private fun releaseVideo() {
+	/**
+	 * releaseVlc=false only stops the libVLC instance (it is reused across
+	 * queue items, vlc-android single-MediaPlayer style); true tears it down
+	 * fully - used by hibernation, errors, engine switches and service death.
+	 */
+	private fun releaseVideo(releaseVlc: Boolean = true) {
 		cancelPrepareWatchdog()
-		runCatching { vlcPlayer?.release() }
-		vlcPlayer = null
+		cancelHibernate()
+		if (releaseVlc) {
+			runCatching { vlcPlayer?.release() }
+			vlcPlayer = null
+		} else {
+			runCatching { vlcPlayer?.stopPlayback() }
+		}
 		runCatching {
 			mediaPlayer?.setOnPreparedListener(null)
 			mediaPlayer?.setOnErrorListener(null)
@@ -587,6 +692,9 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		}
 		mediaPlayer = null
 		videoLooping = false
+		// GIF bytes are the biggest Java-heap object this service ever holds;
+		// never carry them across a media switch
+		gifBytesCache = null
 		proxy?.stop()
 		proxy = null
 		abandonAudioFocus()
@@ -687,6 +795,12 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 
 		/** Covers slow booru CDNs + moov-at-end MP4 probes through the proxy. */
 		private const val PREPARE_TIMEOUT_MS = 30_000L
+
+		/** Grace before engine teardown: comfortably above a rotation/handoff blink. */
+		private const val HIBERNATE_DELAY_MS = 30_000L
+
+		/** Rotation-survival cache ceiling for GIF payloads (Movie owns its own copy). */
+		private const val GIF_CACHE_MAX_BYTES = 8 * 1024 * 1024
 		fun start(context: Context) {
 			ContextCompat.startForegroundService(context, Intent(context, BooruMediaService::class.java))
 		}

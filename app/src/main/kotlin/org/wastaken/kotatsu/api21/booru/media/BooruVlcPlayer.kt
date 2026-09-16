@@ -89,12 +89,20 @@ class BooruVlcPlayer(context: Context) {
 		}
 	}
 
+	fun stopPlayback() {
+		runCatching { player.stop() }
+	}
+
 	/**
 	 * Open + start playback. Hardware decoding on with software fallback
 	 * (setHWDecoderEnabled(true, false)); custom headers are passed straight
 	 * to libVLC as :http-header media options (unused on the proxy loopback).
+	 * The instance is reusable: vlc-android keeps ONE MediaPlayer per service,
+	 * only the Media changes per item (libvlc_new per item is native-heap churn).
 	 */
 	fun play(url: String, headers: Map<String, String> = emptyMap()) {
+		// stop() first: deterministic demuxer teardown before reusing the instance
+		runCatching { player.stop() }
 		val media = Media(libVlc, Uri.parse(url))
 		media.setHWDecoderEnabled(true, false)
 		media.addOption(":network-caching=$NETWORK_CACHING_MS")
@@ -157,11 +165,16 @@ class BooruVlcPlayer(context: Context) {
 			"--no-drop-late-frames",
 			"--no-skip-frames",
 			"--rtsp-tcp",
-			"--network-caching=1500",
+			"--network-caching=800",
 			"--http-reconnect",
 			"--http-continuous",
 		)
 
-		const val NETWORK_CACHING_MS = 1500
+		/**
+		 * 800ms keeps the network buffer at roughly half the 1500ms default:
+		 * buffered bytes = bitrate x cache time, and this build targets a
+		 * low-RAM 2014 tablet where that reserve is pure OOM margin.
+		 */
+		const val NETWORK_CACHING_MS = 800
 	}
 }
