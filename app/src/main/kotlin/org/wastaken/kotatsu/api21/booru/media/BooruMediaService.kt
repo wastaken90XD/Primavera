@@ -464,24 +464,26 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		// vlc-android VLCInstance pattern: ONE engine per service lifetime,
 		// reused across items; created lazily on the first play touch only
 		val existing = vlcPlayer
-		val vlc = existing ?: try {
-			BooruVlcPlayer(this)
-		} catch (e: Exception) {
-			// native libVLC init failed (e.g. OOM unpacking native libs on a
-			// low-RAM device): fall back to the legacy system engine for this run
-			openVideoSystem(item, localUrl)
-			return
+		val vlc = if (existing != null) {
+			existing
+		} else {
+			try {
+				BooruVlcPlayer(this)
+			} catch (e: Exception) {
+				// native libVLC init failed (e.g. OOM unpacking native libs on a
+				// low-RAM device): fall back to the legacy system engine for this run
+				openVideoSystem(item, localUrl)
+				return
+			}
 		}
 		if (existing == null) {
 			vlcPlayer = vlc
 			vlc.callback = object : BooruVlcPlayer.Callback {
-
 				// every handler reads service state at fire time, never a
 				// captured item: one callback now outlives many play() calls
-				private fun live(active: BooruVlcPlayer): Boolean = vlcPlayer === active
 
 				override fun onPlaying(videoWidth: Int, videoHeight: Int) {
-					if (!live(vlc)) return
+					if (vlcPlayer !== vlc) return
 					if (videoWidth > 0 && videoHeight > 0) {
 						this@BooruMediaService.videoWidth = videoWidth
 						this@BooruMediaService.videoHeight = videoHeight
@@ -496,12 +498,12 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 				}
 
 				override fun onBuffering(percent: Float) {
-					if (!live(vlc)) return
+					if (vlcPlayer !== vlc) return
 					onBufferingChange?.invoke(percent < 100f)
 				}
 
 				override fun onEncounteredError() {
-					if (!live(vlc)) return
+					if (vlcPlayer !== vlc) return
 					val failedItem = currentItem
 					releaseVideo()
 					setState(PlaybackState.IDLE)
@@ -509,7 +511,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 				}
 
 				override fun onEndReached() {
-					if (!live(vlc)) return
+					if (vlcPlayer !== vlc) return
 					if (videoLooping) {
 						runCatching {
 							vlc.seekTo(0)
@@ -522,7 +524,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 				}
 
 				override fun onTimeChanged(positionMs: Long) {
-					if (!live(vlc)) return
+					if (vlcPlayer !== vlc) return
 					onPlaybackProgress?.invoke(positionMs.toInt(), vlc.length.toInt())
 				}
 			}
