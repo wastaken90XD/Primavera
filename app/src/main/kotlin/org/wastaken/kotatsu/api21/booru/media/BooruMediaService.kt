@@ -106,7 +106,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	private var boundTargetHeight = 0
 	private var videoLooping = false
 	private var pendingResumeMs = 0
-	private var hibernatedItemId: String? = null
+	private var hibernatedItemId: Long? = null
 	private var hibernatedResumeMs = 0
 	private var hibernateTask: Runnable? = null
 	private val handler = android.os.Handler(android.os.Looper.getMainLooper())
