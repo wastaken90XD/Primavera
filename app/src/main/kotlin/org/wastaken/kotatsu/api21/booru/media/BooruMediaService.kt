@@ -301,7 +301,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 			// hibernated engine (NewPipe lazy-player pattern): the touch that
 			// brings the UI back resurrects playback from the saved position
 			val item = currentItem
-			if (item?.mediaType == BooruMediaType.VIDEO && item.id == hibernatedItemId) {
+			if (item != null && item.mediaType == BooruMediaType.VIDEO && item.id == hibernatedItemId) {
 				playIndex(queue.index)
 			}
 			return
