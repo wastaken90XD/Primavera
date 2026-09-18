@@ -20,6 +20,7 @@ import org.koitharu.kotatsu.parsers.model.Manga
 import org.koitharu.kotatsu.parsers.model.MangaPage
 import org.koitharu.kotatsu.parsers.util.runCatchingCancellable
 import org.wastaken.kotatsu.api21.reader.ui.ReaderState
+import org.wastaken.kotatsu.api21.reader.ui.media.isBooruMedia
 import java.io.InputStream
 import java.util.zip.ZipFile
 import javax.inject.Inject
@@ -62,6 +63,11 @@ class DetectReaderModeUseCase @Inject constructor(
 		val pageIndex = (pages.size * 0.3).roundToInt()
 		val page = requireNotNull(pages.getOrNull(pageIndex)) { "No pages" }
 		val url = repository.getPageUrl(page)
+		if (page.isBooruMedia(settings)) {
+			// strictly booru-only: media pages there are explicit-load, so skip the
+			// probe download and use standard mode; non-booru pages probe as before
+			return false
+		}
 		val uri = url.toUri()
 
 		val size = when {

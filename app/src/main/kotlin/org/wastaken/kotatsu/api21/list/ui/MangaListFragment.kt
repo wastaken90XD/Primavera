@@ -243,12 +243,12 @@ abstract class MangaListFragment :
 		resolveException(error)
 	}
 
-	private fun onGridScaleChanged(scale: Float) {
+	protected open fun onGridScaleChanged(scale: Float) {
 		spanSizeLookup.invalidateCache()
 		spanResolver?.setGridSize(scale, requireViewBinding().recyclerView)
 	}
 
-	private fun onListModeChanged(mode: ListMode) {
+	protected open fun onListModeChanged(mode: ListMode) {
 		spanSizeLookup.invalidateCache()
 		with(requireViewBinding().recyclerView) {
 			removeOnLayoutChangeListener(spanResolver)

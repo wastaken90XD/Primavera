@@ -25,6 +25,17 @@ import org.wastaken.kotatsu.api21.core.model.ZoomMode
 import org.wastaken.kotatsu.api21.core.network.DoHProvider
 import org.wastaken.kotatsu.api21.core.network.proxy.ProxyType
 import org.wastaken.kotatsu.api21.core.util.ext.connectivityManager
+import org.wastaken.kotatsu.api21.booru.media.AspectRatioMode
+import org.wastaken.kotatsu.api21.booru.media.BooruLongPressAction
+import org.wastaken.kotatsu.api21.booru.media.BooruVideoEngine
+import org.wastaken.kotatsu.api21.booru.media.DefaultPlayerMode
+import org.wastaken.kotatsu.api21.booru.media.FloatingWindowPosition
+import org.wastaken.kotatsu.api21.booru.media.FloatingWindowSize
+import org.wastaken.kotatsu.api21.booru.media.GifTapAction
+import org.koitharu.kotatsu.parsers.model.MangaSource
+import org.wastaken.kotatsu.api21.reader.ui.media.mediaPlayerDefault
+import org.wastaken.kotatsu.api21.booru.media.RepeatMode
+import org.wastaken.kotatsu.api21.booru.media.VideoTapAction
 import org.wastaken.kotatsu.api21.core.util.ext.getEnumValue
 import org.wastaken.kotatsu.api21.core.util.ext.observeChanges
 import org.wastaken.kotatsu.api21.core.util.ext.putAll
@@ -97,6 +108,107 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 	var gridSizePages: Int
 		get() = prefs.getInt(KEY_GRID_SIZE_PAGES, 100)
 		set(value) = prefs.edit { putInt(KEY_GRID_SIZE_PAGES, value) }
+
+	/** Booru grid column count (2..4, default 3). ListPreference stores it as text. */
+	val booruGridColumns: Int
+		get() = (prefs.getString(KEY_BOORU_GRID_COLUMNS, null)?.toIntOrNull() ?: BOORU_GRID_COLUMNS_DEFAULT)
+			.coerceIn(BOORU_GRID_COLUMNS_MIN, BOORU_GRID_COLUMNS_MAX)
+
+	// region booru media player
+
+	val isMediaBlurThumbnails: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_BLUR_THUMBNAILS, false)
+
+	val mediaBlurIntensity: Int
+		get() = prefs.getInt(KEY_MEDIA_BLUR_INTENSITY, 10).coerceIn(1, 25)
+
+	val mediaGifTapAction: GifTapAction
+		get() = prefs.getEnumValue(KEY_MEDIA_GIF_TAP_ACTION, GifTapAction.INLINE)
+
+	val mediaVideoTapAction: VideoTapAction
+		get() = prefs.getEnumValue(KEY_MEDIA_VIDEO_TAP_ACTION, VideoTapAction.PLAY_IN_APP)
+
+	val mediaDefaultPlayerMode: DefaultPlayerMode
+		get() = prefs.getEnumValue(KEY_MEDIA_DEFAULT_PLAYER_MODE, DefaultPlayerMode.FULLSCREEN)
+
+	val isMediaGifLoop: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_GIF_LOOP, true)
+
+	val isMediaGifFrameControls: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_GIF_FRAME_CONTROLS, false)
+
+	val isMediaVideoLoop: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_VIDEO_LOOP, false)
+
+	/** Stored as text for the settings ListPreference; unpersistable/blend values fall back to 1x. */
+	val mediaDefaultSpeed: Float
+		get() = prefs.getString(KEY_MEDIA_DEFAULT_SPEED, null)?.toFloatOrNull()?.coerceIn(0.5f, 3f) ?: 1f
+
+	/** Skip amount in seconds (5/10/15/30). */
+	val mediaSkipIntervalSec: Int
+		get() = (prefs.getString(KEY_MEDIA_SKIP_INTERVAL, null)?.toIntOrNull() ?: 10)
+			.coerceIn(1, Int.MAX_VALUE)
+
+	val mediaFloatingSize: FloatingWindowSize
+		get() = prefs.getEnumValue(KEY_MEDIA_FLOATING_SIZE, FloatingWindowSize.MEDIUM)
+
+	val mediaFloatingPosition: FloatingWindowPosition
+		get() = prefs.getEnumValue(KEY_MEDIA_FLOATING_POSITION, FloatingWindowPosition.TOP_RIGHT)
+
+	val isMediaFloatingLock: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_FLOATING_LOCK, false)
+
+	val isMediaVolumeGesture: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_VOLUME_GESTURE, true)
+
+	val isMediaBrightnessGesture: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_BRIGHTNESS_GESTURE, true)
+
+	val isMediaPinchZoom: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_PINCH_ZOOM, true)
+
+	val mediaAspectRatio: AspectRatioMode
+		get() = prefs.getEnumValue(KEY_MEDIA_ASPECT_RATIO, AspectRatioMode.FIT)
+
+	var isMediaQueuePersist: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_QUEUE_PERSIST, true)
+		set(value) = prefs.edit { putBoolean(KEY_MEDIA_QUEUE_PERSIST, value) }
+
+	/** Grid tile long-press: immediate download (old behavior), popup menu, or batch selection. */
+	var booruLongPressAction: BooruLongPressAction
+		get() = prefs.getEnumValue(KEY_BOORU_LONG_PRESS_ACTION, BooruLongPressAction.DOWNLOAD)
+		set(value) = prefs.edit { putEnumValue(KEY_BOORU_LONG_PRESS_ACTION, value) }
+
+	/** Video decoder used by the booru media player: embedded libVLC or the platform MediaPlayer. */
+	var booruVideoEngine: BooruVideoEngine
+		get() = prefs.getEnumValue(KEY_BOORU_VIDEO_ENGINE, BooruVideoEngine.LIBVLC)
+		set(value) = prefs.edit { putEnumValue(KEY_BOORU_VIDEO_ENGINE, value) }
+
+	/**
+	 * Per-source gate for the built-in media player ("media_player_source_*").
+	 * Default: on for native booru sources, off otherwise.
+	 */
+	fun isMediaPlayerEnabledForSource(source: MangaSource): Boolean =
+		prefs.getBoolean(KEY_MEDIA_PLAYER_SOURCE_PREFIX + source.name, source.mediaPlayerDefault())
+
+	fun setMediaPlayerEnabledForSource(source: MangaSource, enabled: Boolean) {
+		prefs.edit { putBoolean(KEY_MEDIA_PLAYER_SOURCE_PREFIX + source.name, enabled) }
+	}
+
+	fun resetMediaPlayerSourceOverrides() {
+		val keys = prefs.all.keys.filter { it.startsWith(KEY_MEDIA_PLAYER_SOURCE_PREFIX) }
+		if (keys.isNotEmpty()) {
+			prefs.edit { for (key in keys) remove(key) }
+		}
+	}
+
+	val mediaQueueRepeat: RepeatMode
+		get() = prefs.getEnumValue(KEY_MEDIA_QUEUE_REPEAT, RepeatMode.NONE)
+
+	val isMediaQueueShuffleOnLoad: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_QUEUE_SHUFFLE, false)
+
+	// endregion booru media player
 
 	val isQuickFilterEnabled: Boolean
 		get() = prefs.getBoolean(KEY_QUICK_FILTER, true)
@@ -613,6 +725,9 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 	val isPagesSavingAskEnabled: Boolean
 		get() = prefs.getBoolean(KEY_PAGES_SAVE_ASK, true)
 
+	val isPagesSaveOriginalEnabled: Boolean
+		get() = prefs.getBoolean(KEY_PAGES_SAVE_ORIGINAL, true)
+
 	val isStatsEnabled: Boolean
 		get() = prefs.getBoolean(KEY_STATS_ENABLED, false)
 
@@ -716,6 +831,61 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_SEARCH_HISTORY_CLEAR = "search_history_clear"
 		const val KEY_UPDATES_FEED_CLEAR = "updates_feed_clear"
 		const val KEY_GRID_SIZE = "grid_size"
+		const val KEY_BOORU_GRID_COLUMNS = "booru_grid_columns"
+
+		// booru media player ("Media player" settings section)
+		const val KEY_MEDIA_BLUR_THUMBNAILS = "media_blur_thumbnails"
+		const val KEY_BOORU_LONG_PRESS_ACTION = "booru_long_press_action"
+		const val KEY_MEDIA_BLUR_INTENSITY = "media_blur_intensity"
+		const val KEY_MEDIA_GIF_TAP_ACTION = "media_gif_tap_action"
+		const val KEY_MEDIA_VIDEO_TAP_ACTION = "media_video_tap_action"
+		const val KEY_MEDIA_DEFAULT_PLAYER_MODE = "media_default_player_mode"
+		const val KEY_MEDIA_GIF_LOOP = "media_gif_loop"
+		const val KEY_MEDIA_GIF_FRAME_CONTROLS = "media_gif_frame_controls"
+		const val KEY_MEDIA_VIDEO_LOOP = "media_video_loop"
+		const val KEY_MEDIA_DEFAULT_SPEED = "media_default_speed"
+		const val KEY_MEDIA_SKIP_INTERVAL = "media_skip_interval"
+		const val KEY_MEDIA_FLOATING_SIZE = "media_floating_size"
+		const val KEY_MEDIA_FLOATING_POSITION = "media_floating_position"
+		const val KEY_MEDIA_FLOATING_LOCK = "media_floating_lock"
+		const val KEY_MEDIA_VOLUME_GESTURE = "media_volume_gesture"
+		const val KEY_MEDIA_BRIGHTNESS_GESTURE = "media_brightness_gesture"
+		const val KEY_MEDIA_PINCH_ZOOM = "media_pinch_zoom"
+		const val KEY_MEDIA_ASPECT_RATIO = "media_aspect_ratio"
+		const val KEY_MEDIA_QUEUE_PERSIST = "media_queue_persist"
+		const val KEY_MEDIA_QUEUE_REPEAT = "media_queue_repeat"
+		const val KEY_MEDIA_QUEUE_SHUFFLE = "media_queue_shuffle"
+		const val KEY_BOORU_VIDEO_ENGINE = "booru_video_engine"
+
+		/** Prefix for the per-source media-player toggles (dynamic keys, not exported). */
+		const val KEY_MEDIA_PLAYER_SOURCE_PREFIX = "media_player_source_"
+
+		/** Every key owned by Settings → "Media player" (settings import/export + diff). */
+		@JvmField
+		val MEDIA_KEYS: Set<String> = setOf(
+			KEY_MEDIA_BLUR_THUMBNAILS,
+			KEY_MEDIA_BLUR_INTENSITY,
+			KEY_MEDIA_GIF_TAP_ACTION,
+			KEY_MEDIA_VIDEO_TAP_ACTION,
+			KEY_MEDIA_DEFAULT_PLAYER_MODE,
+			KEY_MEDIA_GIF_LOOP,
+			KEY_MEDIA_GIF_FRAME_CONTROLS,
+			KEY_MEDIA_VIDEO_LOOP,
+			KEY_MEDIA_DEFAULT_SPEED,
+			KEY_MEDIA_SKIP_INTERVAL,
+			KEY_MEDIA_FLOATING_SIZE,
+			KEY_MEDIA_FLOATING_POSITION,
+			KEY_MEDIA_FLOATING_LOCK,
+			KEY_MEDIA_VOLUME_GESTURE,
+			KEY_MEDIA_BRIGHTNESS_GESTURE,
+			KEY_MEDIA_PINCH_ZOOM,
+			KEY_MEDIA_ASPECT_RATIO,
+			KEY_MEDIA_QUEUE_PERSIST,
+			KEY_MEDIA_QUEUE_REPEAT,
+			KEY_MEDIA_QUEUE_SHUFFLE,
+			KEY_BOORU_LONG_PRESS_ACTION,
+			KEY_BOORU_VIDEO_ENGINE,
+		)
 		const val KEY_GRID_SIZE_PAGES = "grid_size_pages"
 		const val KEY_REMOTE_SOURCES = "remote_sources"
 		const val KEY_LOCAL_STORAGE = "local_storage"
@@ -863,6 +1033,7 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_READING_TIME = "reading_time"
 		const val KEY_PAGES_SAVE_DIR = "pages_dir"
 		const val KEY_PAGES_SAVE_ASK = "pages_dir_ask"
+		const val KEY_PAGES_SAVE_ORIGINAL = "pages_save_original"
 		const val KEY_STATS_ENABLED = "stats_on"
 		const val KEY_FEED_HEADER = "feed_header"
 		const val KEY_SEARCH_SUGGESTION_TYPES = "search_suggest_types"
@@ -902,5 +1073,8 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		// values
 		private const val READER_CROP_PAGED = 1
 		private const val READER_CROP_WEBTOON = 2
+		private const val BOORU_GRID_COLUMNS_DEFAULT = 3
+		private const val BOORU_GRID_COLUMNS_MIN = 2
+		private const val BOORU_GRID_COLUMNS_MAX = 4
 	}
 }

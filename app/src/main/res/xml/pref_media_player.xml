@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto">
+
+	<PreferenceScreen
+		android:fragment="org.wastaken.kotatsu.api21.settings.media.MediaPlayerSourcesFragment"
+		android:icon="@drawable/ic_list"
+		android:key="media_player_sources"
+		android:summary="@string/media_player_sources_summary"
+		android:title="@string/media_player_sources" />
+
+	<PreferenceCategory android:title="@string/media_thumbnails">
+
+		<SwitchPreferenceCompat
+			android:defaultValue="false"
+			android:key="media_blur_thumbnails"
+			android:summary="@string/media_blur_thumbnails_summary"
+			android:title="@string/media_blur_thumbnails" />
+
+		<SeekBarPreference
+			android:defaultValue="10"
+			android:dependency="media_blur_thumbnails"
+			android:key="media_blur_intensity"
+			android:max="25"
+			android:title="@string/media_blur_intensity" />
+
+		<ListPreference
+			android:entries="@array/media_gif_tap_entries"
+			android:key="media_gif_tap_action"
+			android:title="@string/media_gif_tap_action"
+			app:useSimpleSummaryProvider="true" />
+
+		<ListPreference
+			android:entries="@array/media_video_tap_entries"
+			android:key="media_video_tap_action"
+			android:title="@string/media_video_tap_action"
+			app:useSimpleSummaryProvider="true" />
+
+		<ListPreference
+			android:entries="@array/booru_long_press_entries"
+			android:key="booru_long_press_action"
+			android:title="@string/booru_long_press_action"
+			app:useSimpleSummaryProvider="true" />
+
+	</PreferenceCategory>
+
+	<PreferenceCategory android:title="@string/media_player_section">
+
+		<ListPreference
+			android:entries="@array/booru_video_engine_entries"
+			android:key="booru_video_engine"
+			android:title="@string/booru_video_engine"
+			app:useSimpleSummaryProvider="true" />
+
+		<ListPreference
+			android:entries="@array/media_player_mode_entries"
+			android:key="media_default_player_mode"
+			android:title="@string/media_default_player_mode"
+			app:useSimpleSummaryProvider="true" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="true"
+			android:key="media_gif_loop"
+			android:title="@string/media_gif_loop" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="false"
+			android:key="media_gif_frame_controls"
+			android:title="@string/media_gif_frame_controls" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="false"
+			android:key="media_video_loop"
+			android:title="@string/media_video_loop" />
+
+		<ListPreference
+			android:entries="@array/media_speed_entries"
+			android:key="media_default_speed"
+			android:title="@string/media_default_speed"
+			app:useSimpleSummaryProvider="true" />
+
+		<ListPreference
+			android:entries="@array/media_skip_entries"
+			android:key="media_skip_interval"
+			android:title="@string/media_skip_interval"
+			app:useSimpleSummaryProvider="true" />
+
+		<ListPreference
+			android:entries="@array/media_ratio_entries"
+			android:key="media_aspect_ratio"
+			android:title="@string/media_aspect_ratio"
+			app:useSimpleSummaryProvider="true" />
+
+	</PreferenceCategory>
+
+	<PreferenceCategory android:title="@string/media_floating_section">
+
+		<ListPreference
+			android:entries="@array/media_floating_size_entries"
+			android:key="media_floating_size"
+			android:title="@string/media_floating_size"
+			app:useSimpleSummaryProvider="true" />
+
+		<ListPreference
+			android:entries="@array/media_floating_position_entries"
+			android:key="media_floating_position"
+			android:title="@string/media_floating_position"
+			app:useSimpleSummaryProvider="true" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="false"
+			android:key="media_floating_lock"
+			android:title="@string/media_floating_lock" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="true"
+			android:key="media_volume_gesture"
+			android:title="@string/media_volume_gesture" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="true"
+			android:key="media_brightness_gesture"
+			android:title="@string/media_brightness_gesture" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="true"
+			android:key="media_pinch_zoom"
+			android:title="@string/media_pinch_zoom" />
+
+	</PreferenceCategory>
+
+	<PreferenceCategory android:title="@string/media_queue_section">
+
+		<SwitchPreferenceCompat
+			android:defaultValue="true"
+			android:key="media_queue_persist"
+			android:title="@string/media_queue_persist" />
+
+		<ListPreference
+			android:entries="@array/media_repeat_entries"
+			android:key="media_queue_repeat"
+			android:title="@string/media_queue_repeat"
+			app:useSimpleSummaryProvider="true" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="false"
+			android:key="media_queue_shuffle"
+			android:title="@string/media_queue_shuffle" />
+
+	</PreferenceCategory>
+
+	<PreferenceCategory android:title="@string/media_playlists">
+
+		<Preference
+			android:key="media_playlists_manage"
+			android:summary="@string/media_playlists_summary"
+			android:title="@string/media_playlists" />
+
+	</PreferenceCategory>
+
+	<PreferenceCategory android:title="@string/media_import_export_section">
+
+		<Preference
+			android:key="media_export_settings"
+			android:title="@string/media_export_settings" />
+
+		<Preference
+			android:key="media_import_settings"
+			android:title="@string/media_import_settings" />
+
+		<Preference
+			android:key="media_export_queue"
+			android:title="@string/media_export_queue" />
+
+		<Preference
+			android:key="media_import_queue"
+			android:title="@string/media_import_queue" />
+
+	</PreferenceCategory>
+
+</PreferenceScreen>

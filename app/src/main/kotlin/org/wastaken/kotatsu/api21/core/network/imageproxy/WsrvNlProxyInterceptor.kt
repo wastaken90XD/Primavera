@@ -1,10 +1,12 @@
 package org.wastaken.kotatsu.api21.core.network.imageproxy
 
+import android.util.Log
 import coil3.request.ImageRequest
 import coil3.size.Dimension
 import coil3.size.isOriginal
 import okhttp3.HttpUrl
 import okhttp3.Request
+import org.wastaken.kotatsu.api21.BuildConfig
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import javax.inject.Inject
 
@@ -13,9 +15,13 @@ class WsrvNlProxyInterceptor @Inject constructor(
 ) : BaseImageProxyInterceptor() {
 
 	fun buildUrl(url: String, includeCoilSize: Boolean = false, coilW: Int = 0, coilH: Int = 0): HttpUrl {
-		android.util.Log.d("WSRV_DEBUG", "WsrvNlProxyInterceptor.buildUrl() called. Input URL: $url")
+		if (BuildConfig.DEBUG) {
+			Log.d("WSRV_DEBUG", "WsrvNlProxyInterceptor.buildUrl() called. Input URL: $url")
+		}
 		val strippedUrl = url.substringBefore("?").replaceFirst(Regex("^https?://"), "")
-		android.util.Log.d("WSRV_DEBUG", "Stripped URL: $strippedUrl")
+		if (BuildConfig.DEBUG) {
+			Log.d("WSRV_DEBUG", "Stripped URL: $strippedUrl")
+		}
 		val targetUrl = buildWorkerRelayUrl(strippedUrl)
 		val newUrl = HttpUrl.Builder()
 			.scheme("https")
@@ -99,7 +105,9 @@ class WsrvNlProxyInterceptor @Inject constructor(
 		}
 
 		val builtUrl = newUrl.build()
-		android.util.Log.d("WSRV_DEBUG", "Final Built WSRV URL: $builtUrl")
+		if (BuildConfig.DEBUG) {
+			Log.d("WSRV_DEBUG", "Final Built WSRV URL: $builtUrl")
+		}
 		return builtUrl
 	}
 
@@ -114,12 +122,14 @@ class WsrvNlProxyInterceptor @Inject constructor(
 		}
 		val workerUrl = settings.wsrvWorkerUrl.trim().trimEnd('/')
 		if (workerUrl.isEmpty() || !workerUrl.startsWith("https://")) {
-			android.util.Log.d("WSRV_DEBUG", "Worker relay enabled but URL missing/invalid, falling back to direct source")
+			Log.w("WSRV_DEBUG", "Worker relay enabled but URL missing/invalid, falling back to direct source")
 			return strippedUrl
 		}
 		val param = settings.wsrvWorkerQueryParam
 		val relayUrl = "$workerUrl/?$param=$strippedUrl"
-		android.util.Log.d("WSRV_DEBUG", "Worker relay wrapping source URL: $relayUrl")
+		if (BuildConfig.DEBUG) {
+			Log.d("WSRV_DEBUG", "Worker relay wrapping source URL: $relayUrl")
+		}
 		return relayUrl
 	}
 

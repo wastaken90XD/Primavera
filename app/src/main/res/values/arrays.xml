@@ -20,6 +20,11 @@
 		<item>@string/detailed_list</item>
 		<item>@string/grid</item>
 	</string-array>
+	<string-array name="booru_grid_columns" translatable="false">
+		<item>2</item>
+		<item>3</item>
+		<item>4</item>
+	</string-array>
 	<string-array name="screenshots_policy" translatable="false">
 		<item>@string/screenshots_allow</item>
 		<item>@string/screenshots_block_nsfw</item>
@@ -196,4 +201,144 @@
 	<item>entropy</item>
 	<item>attention</item>
 </string-array>
+	<!-- Persisted values for the ListPreferences above; must mirror the enum
+	     declaration order (X.entries.names()) used by the settings fragments. -->
+	<string-array name="values_list_modes" translatable="false">
+		<item>LIST</item>
+		<item>DETAILED_LIST</item>
+		<item>GRID</item>
+	</string-array>
+	<string-array name="values_progress_indicators" translatable="false">
+		<item>NONE</item>
+		<item>PERCENT_READ</item>
+		<item>PERCENT_LEFT</item>
+		<item>CHAPTERS_READ</item>
+		<item>CHAPTERS_LEFT</item>
+	</string-array>
+	<string-array name="values_download_formats" translatable="false">
+		<item>AUTOMATIC</item>
+		<item>SINGLE_CBZ</item>
+		<item>MULTIPLE_CBZ</item>
+	</string-array>
+	<string-array name="values_metered_network_options" translatable="false">
+		<item>ENABLED</item>
+		<item>ASK</item>
+		<item>DISABLED</item>
+	</string-array>
+	<string-array name="values_reader_modes" translatable="false">
+		<item>STANDARD</item>
+		<item>REVERSED</item>
+		<item>VERTICAL</item>
+		<item>WEBTOON</item>
+	</string-array>
+	<string-array name="values_zoom_modes" translatable="false">
+		<item>FIT_CENTER</item>
+		<item>FIT_HEIGHT</item>
+		<item>FIT_WIDTH</item>
+		<item>KEEP_START</item>
+	</string-array>
+	<string-array name="values_reader_controls" translatable="false">
+		<item>PREV_CHAPTER</item>
+		<item>NEXT_CHAPTER</item>
+		<item>SLIDER</item>
+		<item>PAGES_SHEET</item>
+		<item>SCREEN_ROTATION</item>
+		<item>SAVE_PAGE</item>
+		<item>TIMER</item>
+		<item>BOOKMARK</item>
+	</string-array>
+	<string-array name="values_reader_animation" translatable="false">
+		<item>NONE</item>
+		<item>DEFAULT</item>
+		<item>ADVANCED</item>
+	</string-array>
+	<string-array name="values_reader_backgrounds" translatable="false">
+		<item>DEFAULT</item>
+		<item>LIGHT</item>
+		<item>DARK</item>
+		<item>WHITE</item>
+		<item>BLACK</item>
+	</string-array>
+	<string-array name="values_tracker_download_strategies" translatable="false">
+		<item>DISABLED</item>
+		<item>DOWNLOADED</item>
+	</string-array>
+	<string-array name="values_screenshots_policy" translatable="false">
+		<item>ALLOW</item>
+		<item>BLOCK_NSFW</item>
+		<item>BLOCK_INCOGNITO</item>
+		<item>BLOCK_ALL</item>
+	</string-array>
+	<string-array name="values_incognito_nsfw_options" translatable="false">
+		<item>ENABLED</item>
+		<item>ASK</item>
+		<item>DISABLED</item>
+	</string-array>
+	<string-array name="values_screen_orientations" translatable="false">
+		<item>-1</item>
+		<item>10</item>
+		<item>12</item>
+		<item>11</item>
+	</string-array>
+
+	<!-- Booru media player settings (display labels; values are assigned programmatically) -->
+	<string-array name="booru_long_press_entries">
+		<item>Download immediately</item>
+		<item>Show menu</item>
+		<item>Select</item>
+	</string-array>
+	<string-array name="booru_video_engine_entries">
+		<item>libVLC (recommended)</item>
+		<item>System (legacy)</item>
+	</string-array>
+	<string-array name="media_gif_tap_entries">
+		<item>@string/media_tap_load_inline</item>
+		<item>@string/media_tap_open_detail</item>
+	</string-array>
+	<string-array name="media_video_tap_entries">
+		<item>@string/media_tap_play_in_app</item>
+		<item>@string/media_tap_add_to_queue</item>
+		<item>@string/media_tap_open_detail</item>
+	</string-array>
+	<string-array name="media_player_mode_entries">
+		<item>@string/media_mode_fullscreen</item>
+		<item>@string/media_mode_inline</item>
+		<item>@string/media_mode_floating</item>
+	</string-array>
+	<string-array name="media_speed_entries" translatable="false">
+		<item>0.5×</item>
+		<item>1×</item>
+		<item>1.25×</item>
+		<item>1.5×</item>
+		<item>2×</item>
+	</string-array>
+	<string-array name="media_skip_entries" translatable="false">
+		<item>5s</item>
+		<item>10s</item>
+		<item>15s</item>
+		<item>30s</item>
+	</string-array>
+	<string-array name="media_floating_size_entries">
+		<item>@string/media_size_small</item>
+		<item>@string/media_size_medium</item>
+		<item>@string/media_size_large</item>
+	</string-array>
+	<string-array name="media_floating_position_entries">
+		<item>@string/media_pos_top_right</item>
+		<item>@string/media_pos_bottom_right</item>
+		<item>@string/media_pos_bottom_left</item>
+	</string-array>
+	<string-array name="media_ratio_entries">
+		<item>@string/media_ratio_fit</item>
+		<item>@string/media_ratio_fill</item>
+		<item>@string/media_ratio_crop</item>
+		<item>@string/media_ratio_16_9</item>
+		<item>@string/media_ratio_4_3</item>
+	</string-array>
+	<string-array name="media_repeat_entries">
+		<item>@string/media_repeat_none</item>
+		<item>@string/media_repeat_one</item>
+		<item>@string/media_repeat_all</item>
+	</string-array>
+
 </resources>

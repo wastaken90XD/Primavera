@@ -13,12 +13,14 @@
 	<ListPreference
 		android:defaultValue="allow"
 		android:entries="@array/screenshots_policy"
+			android:entryValues="@array/values_screenshots_policy"
 		android:key="screenshots_policy"
 		android:title="@string/screenshots_policy"
 		app:useSimpleSummaryProvider="true" />
 
 	<ListPreference
 		android:entries="@array/incognito_nsfw_options"
+			android:entryValues="@array/values_incognito_nsfw_options"
 		android:key="incognito_nsfw"
 		android:title="@string/incognito_for_nsfw"
 		app:useSimpleSummaryProvider="true" />

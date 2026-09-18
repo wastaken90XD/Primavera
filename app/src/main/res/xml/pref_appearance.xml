@@ -31,6 +31,7 @@
 
 		<ListPreference
 			android:entries="@array/list_modes"
+			android:entryValues="@array/values_list_modes"
 			android:key="list_mode_2"
 			android:title="@string/list_mode"
 			app:useSimpleSummaryProvider="true" />
@@ -43,6 +44,14 @@
 			android:valueTo="150"
 			app:defaultValue="100" />
 
+		<ListPreference
+			android:defaultValue="3"
+			android:entries="@array/booru_grid_columns"
+			android:entryValues="@array/booru_grid_columns"
+			android:key="booru_grid_columns"
+			android:title="@string/booru_grid_columns"
+			app:useSimpleSummaryProvider="true" />
+
 		<SwitchPreferenceCompat
 			android:defaultValue="true"
 			android:key="quick_filter"
@@ -51,6 +60,7 @@
 
 		<ListPreference
 			android:entries="@array/progress_indicators"
+			android:entryValues="@array/values_progress_indicators"
 			android:key="progress_indicators"
 			android:title="@string/show_reading_indicators"
 			app:useSimpleSummaryProvider="true" />

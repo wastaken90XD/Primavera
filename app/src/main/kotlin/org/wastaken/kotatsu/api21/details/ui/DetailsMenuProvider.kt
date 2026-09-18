@@ -14,19 +14,24 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.launch
+import org.koitharu.kotatsu.parsers.model.ContentType
+import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.wastaken.kotatsu.api21.R
 import org.wastaken.kotatsu.api21.core.model.LocalMangaSource
+import org.wastaken.kotatsu.api21.core.model.unwrap
 import org.wastaken.kotatsu.api21.core.nav.AppRouter
 import org.wastaken.kotatsu.api21.core.nav.router
 import org.wastaken.kotatsu.api21.core.os.AppShortcutManager
 import org.wastaken.kotatsu.api21.core.ui.dialog.buildAlertDialog
 import org.wastaken.kotatsu.api21.core.util.ext.isHttpUrl
+import org.wastaken.kotatsu.api21.reader.ui.PageSaveHelper
 
 class DetailsMenuProvider(
 	private val activity: FragmentActivity,
 	private val viewModel: DetailsViewModel,
 	private val snackbarHost: View,
 	private val appShortcutManager: AppShortcutManager,
+	private val pageSaveHelper: PageSaveHelper,
 ) : MenuProvider, ActivityResultCallback<ActivityResult> {
 
 	private val activityForResultLauncher = activity.registerForActivityResult(
@@ -45,6 +50,9 @@ class DetailsMenuProvider(
 		val manga = viewModel.manga.value
 		menu.findItem(R.id.action_share).isVisible = manga != null && AppRouter.isShareSupported(manga)
 		menu.findItem(R.id.action_save).isVisible = manga?.source != null && manga.source != LocalMangaSource
+		menu.findItem(R.id.action_save_image)?.isVisible = manga?.source?.unwrap().let {
+			(it as? MangaParserSource)?.contentType == ContentType.BOORU
+		}
 		menu.findItem(R.id.action_delete).isVisible = manga?.source == LocalMangaSource
 		menu.findItem(R.id.action_browser).isVisible = manga?.publicUrl?.isHttpUrl() == true
 		menu.findItem(R.id.action_alternatives).isVisible = manga?.source != LocalMangaSource
@@ -72,6 +80,10 @@ class DetailsMenuProvider(
 
 			R.id.action_save -> {
 				router.showDownloadDialog(manga, snackbarHost)
+			}
+
+			R.id.action_save_image -> {
+				viewModel.saveBooruImage(pageSaveHelper)
 			}
 
 			R.id.action_browser -> {
