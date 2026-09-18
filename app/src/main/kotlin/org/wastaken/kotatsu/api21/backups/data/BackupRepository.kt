@@ -50,8 +50,8 @@ class BackupRepository @Inject constructor(
 	private val database: MangaDatabase,
 	private val settings: AppSettings,
 	private val tapGridSettings: TapGridSettings,
-	private val cookieJar: MutableCookieJar,
-	private val mangaRepositoryFactory: MangaRepository.Factory,
+	private val cookieJar: MutableCookieJar? = null,
+	private val mangaRepositoryFactory: MangaRepository.Factory? = null,
 ) {
 
 	private val json = Json {
@@ -116,10 +116,12 @@ class BackupRepository @Inject constructor(
 					serializer = serializer(),
 				)
 
-				BackupSection.COOKIES -> output.writeString(
-					section = BackupSection.COOKIES,
-					data = dumpCookies(),
-				)
+				BackupSection.COOKIES -> dumpCookies()?.let {
+					output.writeString(
+						section = BackupSection.COOKIES,
+						data = it,
+					)
+				}
 			}
 			progress?.emit(commonProgress)
 			commonProgress++
@@ -322,16 +324,23 @@ class BackupRepository @Inject constructor(
 	 * "name=value; name=value" headers: CookieManager.getCookie returns no
 	 * attributes (expiry/path/httpOnly are not readable on any API level) and
 	 * for login/bypass sessions name+value is the whole credential anyway.
+	 *
+	 * Returns null when no cookie jar/product factory is injected. That is the
+	 * AppBackupAgent (system Auto Backup) path: it constructs this repository
+	 * without DI, and session cookies are credentials that should not go
+	 * unencrypted into Google Drive sync anyway.
 	 */
-	private suspend fun dumpCookies(): String {
+	private suspend fun dumpCookies(): String? {
+		val jar = cookieJar ?: return null
+		val factory = mangaRepositoryFactory ?: return null
 		val map = ArrayMap<String, String>()
 		for (entity in database.getSourcesDao().findAll()) {
 			val repository = runCatching {
-				mangaRepositoryFactory.create(MangaSource(entity.source))
+				factory.create(MangaSource(entity.source))
 			}.getOrNull() ?: continue
 			val domain = (repository as? ParserMangaRepository)?.domain ?: continue
 			val url = runCatching { "https://$domain/".toHttpUrl() }.getOrNull() ?: continue
-			val cookies = runCatching { cookieJar.loadForRequest(url) }.getOrDefault(emptyList())
+			val cookies = runCatching { jar.loadForRequest(url) }.getOrDefault(emptyList())
 			if (cookies.isNotEmpty()) {
 				map[url.toString()] = cookies.joinToString("; ") { it.name + "=" + it.value }
 			}
@@ -343,14 +352,16 @@ class BackupRepository @Inject constructor(
 	 * Re-inserts the dumped headers through the jar's own Set-Cookie path, so
 	 * both live implementations end up in a valid state: the WebView store gets
 	 * host cookies via CookieManager.setCookie, the SharedPreferences fallback
-	 * persists them across restarts by itself.
+	 * persists them across restarts by itself. No-op without an injected jar.
 	 */
-	private fun restoreCookies(map: Map<String, String>) {
-		for ((url, header) in map) {
+	private fun restoreCookies(map: Map<String, Any?>) {
+		val jar = cookieJar ?: return
+		for ((url, headerAny) in map) {
+			val header = headerAny as? String ?: continue
 			val httpUrl = runCatching { url.toHttpUrl() }.getOrNull() ?: continue
 			for (token in header.split(';')) {
 				if (token.isNotBlank()) {
-					runCatching { cookieJar.insertCookie(httpUrl, token.trim()) }
+					runCatching { jar.insertCookie(httpUrl, token.trim()) }
 				}
 			}
 		}
