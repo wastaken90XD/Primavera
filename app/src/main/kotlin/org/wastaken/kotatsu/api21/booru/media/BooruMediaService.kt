@@ -635,11 +635,15 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	private fun scheduleHibernateIfIdle() {
 		cancelHibernate()
 		if (isVideoPlaying() || playbackState == PlaybackState.PREPARING) return
-		if (boundSurface != null || boundSurfaceTexture != null) return
+		// a real STOP (state IDLE, not a pause) frees the engine almost at once:
+		// there is no rotation/handoff grace to preserve because the user is not
+		// watching anything, and the engine is the memory hog on this device
+		val idleStop = playbackState == PlaybackState.IDLE
+		if (!idleStop && (boundSurface != null || boundSurfaceTexture != null)) return
 		if (vlcPlayer == null && mediaPlayer == null) return
-		val task = Runnable { hibernateEngine() }
+		val task = Runnable { hibernateEngine(idleStop) }
 		hibernateTask = task
-		handler.postDelayed(task, HIBERNATE_DELAY_MS)
+		handler.postDelayed(task, if (idleStop) HIBERNATE_IDLE_DELAY_MS else HIBERNATE_DELAY_MS)
 	}
 
 	private fun cancelHibernate() {
@@ -647,14 +651,14 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		hibernateTask = null
 	}
 
-	private fun hibernateEngine() {
+	private fun hibernateEngine(allowSurfaceBound: Boolean = false) {
 		hibernateTask = null
 		// the guards were true when the timer POSTED, not necessarily when it
 		// FIRES: a background resume (notification toggle rebinds no surface)
 		// can restart playback inside the grace window, and releasing the
 		// engine mid-decode is exactly the process-death path on API 21
 		if (isVideoPlaying() || playbackState == PlaybackState.PREPARING) return
-		if (boundSurface != null || boundSurfaceTexture != null) return
+		if (!allowSurfaceBound && (boundSurface != null || boundSurfaceTexture != null)) return
 		if (vlcPlayer == null && mediaPlayer == null) return
 		val item = currentItem
 		if (item != null && item.mediaType == BooruMediaType.VIDEO) {
@@ -674,7 +678,14 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 			}
 			else -> {
 				val next = queue.nextIndex()
-				if (next >= 0) playIndex(next) else setState(PlaybackState.IDLE)
+				if (next >= 0) {
+					playIndex(next)
+				} else {
+					setState(PlaybackState.IDLE)
+					// the video really STOPPED (finished, not paused), schedule
+					// the near-instant idle teardown even while the screen is up
+					scheduleHibernateIfIdle()
+				}
 			}
 		}
 	}
@@ -809,6 +820,9 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 
 		/** Grace before engine teardown: comfortably above a rotation/handoff blink. */
 		private const val HIBERNATE_DELAY_MS = 30_000L
+
+		/** Delay after a real STOP (state IDLE, not a pause): kill the RAM hog fast. */
+		private const val HIBERNATE_IDLE_DELAY_MS = 2_000L
 
 		/** Rotation-survival cache ceiling for GIF payloads (Movie owns its own copy). */
 		private const val GIF_CACHE_MAX_BYTES = 8 * 1024 * 1024
