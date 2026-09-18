@@ -27,11 +27,16 @@ import org.wastaken.kotatsu.api21.backups.data.model.MangaBackup
 import org.wastaken.kotatsu.api21.backups.data.model.SourceBackup
 import org.wastaken.kotatsu.api21.backups.domain.BackupSection
 import org.wastaken.kotatsu.api21.core.db.MangaDatabase
+import org.wastaken.kotatsu.api21.core.model.MangaSource
+import org.wastaken.kotatsu.api21.core.network.cookies.MutableCookieJar
+import org.wastaken.kotatsu.api21.core.parser.MangaRepository
+import org.wastaken.kotatsu.api21.core.parser.ParserMangaRepository
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.core.util.CompositeResult
 import org.wastaken.kotatsu.api21.core.util.json.JsonArrayStreamReader
 import org.wastaken.kotatsu.api21.core.util.progress.Progress
 import org.koitharu.kotatsu.parsers.util.runCatchingCancellable
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.wastaken.kotatsu.api21.reader.data.TapGridSettings
 import java.io.InputStream
 import java.io.OutputStream
@@ -45,6 +50,8 @@ class BackupRepository @Inject constructor(
 	private val database: MangaDatabase,
 	private val settings: AppSettings,
 	private val tapGridSettings: TapGridSettings,
+	private val cookieJar: MutableCookieJar,
+	private val mangaRepositoryFactory: MangaRepository.Factory,
 ) {
 
 	private val json = Json {
@@ -108,6 +115,11 @@ class BackupRepository @Inject constructor(
 					data = database.getSourcesDao().dumpEnabled().map { SourceBackup(it) },
 					serializer = serializer(),
 				)
+
+				BackupSection.COOKIES -> output.writeString(
+					section = BackupSection.COOKIES,
+					data = dumpCookies(),
+				)
 			}
 			progress?.emit(commonProgress)
 			commonProgress++
@@ -164,6 +176,11 @@ class BackupRepository @Inject constructor(
 
 						BackupSection.SOURCES -> input.readJsonArray<SourceBackup>(serializer()).restoreToDb {
 							getSourcesDao().upsert(it.toEntity())
+						}
+
+						BackupSection.COOKIES -> input.readMap().let {
+							restoreCookies(it)
+							CompositeResult.success()
 						}
 
 						null -> CompositeResult.EMPTY // skip unknown entries
@@ -295,6 +312,48 @@ class BackupRepository @Inject constructor(
 		map.remove(AppSettings.KEY_PROXY_LOGIN)
 		map.remove(AppSettings.KEY_INCOGNITO_MODE)
 		return JSONObject(map).toString()
+	}
+
+	/**
+	 * Cookie snapshot per source domain, same scope the cookies management UI
+	 * uses (https://<domain>/ -> jar.loadForRequest). The live jar is the
+	 * WebView CookieManager, which cannot enumerate cookies by API, so the
+	 * candidate hosts come from the sources table instead. Stored as plain
+	 * "name=value; name=value" headers: CookieManager.getCookie returns no
+	 * attributes (expiry/path/httpOnly are not readable on any API level) and
+	 * for login/bypass sessions name+value is the whole credential anyway.
+	 */
+	private suspend fun dumpCookies(): String {
+		val map = ArrayMap<String, String>()
+		for (entity in database.getSourcesDao().findAll()) {
+			val repository = runCatching {
+				mangaRepositoryFactory.create(MangaSource(entity.source))
+			}.getOrNull() ?: continue
+			val domain = (repository as? ParserMangaRepository)?.domain ?: continue
+			val url = runCatching { "https://$domain/".toHttpUrl() }.getOrNull() ?: continue
+			val cookies = runCatching { cookieJar.loadForRequest(url) }.getOrDefault(emptyList())
+			if (cookies.isNotEmpty()) {
+				map[url.toString()] = cookies.joinToString("; ") { it.name + "=" + it.value }
+			}
+		}
+		return JSONObject(map).toString()
+	}
+
+	/**
+	 * Re-inserts the dumped headers through the jar's own Set-Cookie path, so
+	 * both live implementations end up in a valid state: the WebView store gets
+	 * host cookies via CookieManager.setCookie, the SharedPreferences fallback
+	 * persists them across restarts by itself.
+	 */
+	private fun restoreCookies(map: Map<String, String>) {
+		for ((url, header) in map) {
+			val httpUrl = runCatching { url.toHttpUrl() }.getOrNull() ?: continue
+			for (token in header.split(';')) {
+				if (token.isNotBlank()) {
+					runCatching { cookieJar.insertCookie(httpUrl, token.trim()) }
+				}
+			}
+		}
 	}
 
 	private fun dumpReaderGridSettings(): String {
