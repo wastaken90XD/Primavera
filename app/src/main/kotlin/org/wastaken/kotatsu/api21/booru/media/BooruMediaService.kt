@@ -290,6 +290,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 				vlc.pause()
 				setState(PlaybackState.PAUSED)
 				abandonAudioFocus()
+				scheduleHibernateIfIdle()
 			} else {
 				requestAudioFocus()
 				vlc.resume()
@@ -311,6 +312,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 			player.pause()
 			setState(PlaybackState.PAUSED)
 			abandonAudioFocus()
+			scheduleHibernateIfIdle()
 		} else {
 			requestAudioFocus()
 			player.start()
@@ -647,6 +649,13 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 
 	private fun hibernateEngine() {
 		hibernateTask = null
+		// the guards were true when the timer POSTED, not necessarily when it
+		// FIRES: a background resume (notification toggle rebinds no surface)
+		// can restart playback inside the grace window, and releasing the
+		// engine mid-decode is exactly the process-death path on API 21
+		if (isVideoPlaying() || playbackState == PlaybackState.PREPARING) return
+		if (boundSurface != null || boundSurfaceTexture != null) return
+		if (vlcPlayer == null && mediaPlayer == null) return
 		val item = currentItem
 		if (item != null && item.mediaType == BooruMediaType.VIDEO) {
 			hibernatedItemId = item.id
