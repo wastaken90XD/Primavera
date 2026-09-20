@@ -293,6 +293,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 				scheduleHibernateIfIdle()
 			} else {
 				requestAudioFocus()
+				cancelHibernate() // a resume invalidates the pause-armed countdown
 				vlc.resume()
 				setState(PlaybackState.PLAYING)
 			}
@@ -315,6 +316,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 			scheduleHibernateIfIdle()
 		} else {
 			requestAudioFocus()
+			cancelHibernate() // a resume invalidates the pause-armed countdown
 			player.start()
 			setState(PlaybackState.PLAYING)
 		}
@@ -634,7 +636,11 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 
 	private fun scheduleHibernateIfIdle() {
 		cancelHibernate()
-		if (isVideoPlaying() || playbackState == PlaybackState.PREPARING) return
+		// PLAYING is tracked app-side: the guarded RELEASED-before-check race is
+		// native isPlaying lagging a just-issued resume/start by a few frames,
+		// which is exactly the window an outdated pause timer fires in
+		if (isVideoPlaying() || playbackState == PlaybackState.PLAYING ||
+			playbackState == PlaybackState.PREPARING) return
 		// a real STOP (state IDLE, not a pause) frees the engine almost at once:
 		// there is no rotation/handoff grace to preserve because the user is not
 		// watching anything, and the engine is the memory hog on this device
@@ -657,7 +663,8 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		// FIRES: a background resume (notification toggle rebinds no surface)
 		// can restart playback inside the grace window, and releasing the
 		// engine mid-decode is exactly the process-death path on API 21
-		if (isVideoPlaying() || playbackState == PlaybackState.PREPARING) return
+		if (isVideoPlaying() || playbackState == PlaybackState.PLAYING ||
+			playbackState == PlaybackState.PREPARING) return
 		if (!allowSurfaceBound && (boundSurface != null || boundSurfaceTexture != null)) return
 		if (vlcPlayer == null && mediaPlayer == null) return
 		val item = currentItem
