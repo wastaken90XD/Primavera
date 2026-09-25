@@ -18,4 +18,16 @@
 
 	<include layout="@layout/layout_page_info" />
 
+	<include
+		layout="@layout/layout_booru_gif_overlay"
+		android:layout_width="match_parent"
+		android:layout_height="@dimen/booru_media_overlay_height"
+		android:layout_gravity="center" />
+
+	<include
+		layout="@layout/layout_booru_video_overlay"
+		android:layout_width="match_parent"
+		android:layout_height="@dimen/booru_media_overlay_height"
+		android:layout_gravity="center" />
+
 </org.wastaken.kotatsu.api21.reader.ui.pager.webtoon.WebtoonFrameLayout>

@@ -12,6 +12,7 @@ import com.google.android.material.tabs.TabLayoutMediator
 import dagger.hilt.android.AndroidEntryPoint
 import org.wastaken.kotatsu.api21.core.exceptions.resolve.SnackbarErrorObserver
 import org.wastaken.kotatsu.api21.core.nav.AppRouter
+import org.wastaken.kotatsu.api21.booru.media.ui.BooruPlayerActivity
 import org.wastaken.kotatsu.api21.core.nav.router
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.core.ui.sheet.AdaptiveSheetBehavior.Companion.STATE_COLLAPSED
@@ -64,6 +65,9 @@ class ChaptersPagesSheet : BaseAdaptiveSheet<SheetChaptersPagesBinding>(),
 		}
 		(viewModel as? DetailsViewModel)?.let { dvm ->
 			ReadButtonDelegate(binding.splitButtonRead, dvm, router).attach(viewLifecycleOwner)
+			dvm.onBooruMediaRoute.observeEvent(viewLifecycleOwner) { item ->
+				BooruPlayerActivity.start(requireContext(), item)
+			}
 		}
 		binding.pager.offscreenPageLimit = adapter.itemCount
 		binding.pager.recyclerView?.isNestedScrollingEnabled = false

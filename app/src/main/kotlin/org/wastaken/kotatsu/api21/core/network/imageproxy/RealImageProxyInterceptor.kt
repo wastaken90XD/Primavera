@@ -1,5 +1,6 @@
 package org.wastaken.kotatsu.api21.core.network.imageproxy
 
+import android.util.Log
 import coil3.intercept.Interceptor
 import coil3.request.ImageResult
 import kotlinx.coroutines.Dispatchers
@@ -7,6 +8,7 @@ import kotlinx.coroutines.plus
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import org.wastaken.kotatsu.api21.BuildConfig
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.core.prefs.observeAsStateFlow
 import org.wastaken.kotatsu.api21.core.util.ext.processLifecycleScope
@@ -26,7 +28,9 @@ class RealImageProxyInterceptor @Inject constructor(
 	)
 
 	override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
-		android.util.Log.d("WSRV_DEBUG", "RealImageProxyInterceptor.intercept() called for URL: ${chain.request.data}. Current proxy setting: ${settings.imagesProxy}")
+		if (BuildConfig.DEBUG) {
+			Log.d("WSRV_DEBUG", "RealImageProxyInterceptor.intercept() called for URL: ${chain.request.data}. Current proxy setting: ${settings.imagesProxy}")
+		}
 		return delegate.value?.intercept(chain) ?: chain.proceed()
 	}
 
