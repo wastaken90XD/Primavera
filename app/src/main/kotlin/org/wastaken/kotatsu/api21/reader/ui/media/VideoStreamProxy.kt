@@ -34,19 +34,23 @@ import java.util.regex.Pattern
  * naturally throttles the upstream read once the ring is full (no bandwidth
  * wasted while paused).
  *
- * Zero-persistence rule kept: the ring is an okio [Buffer] (chained 8KB
- * segments, never one giant contiguous array - safe for the fragmented dalvik
- * heap), nothing is written to disk anywhere, and every upstream request is
- * sent with Cache-Control: no-store so the OkHttp disk cache stays out of the
- * video path entirely.
+ * Spill-over persistence (optional, [partCache]): as bytes pass through the
+ * pump they are also spooled into rotating .part chunk files (see
+ * [StreamPartCache]; ~3/4 of the cache budget, ring shrinks to ~1/4 of it).
+ * Backward seeks then stream from the parts instead of re-fetching the
+ * prefix. The parts are transient: purged on every start()/stop().
+ * The readers' legacy zero-persistence path is unchanged: no [partCache],
+ * nothing touches disk, ring keeps its old 6MB cap.
  *
- * Seeking: the framework player re-connects with a Range header on seek. The
- * pipeline is torn down and re-opened upstream with the same byte offset; if
- * the CDN ignores Range (200 instead of 206) the pump skips the prefix before
- * filling the ring, so non-range servers still work, just seek slower.
+ * Seeking: the framework player re-connects with a Range header on seek.
+ * Offsets already spooled are answered from the parts; anything else re-opens
+ * upstream with the same byte offset; if the CDN ignores Range (200 instead
+ * of 206) the pump skips the prefix before filling the ring, so non-range
+ * servers still work, just seek slower.
  */
 class VideoStreamProxy(
 	private val okHttpClient: OkHttpClient,
+	private val partCache: StreamPartCache? = null,
 ) {
 
 	private val lock = Object()
@@ -72,6 +76,7 @@ class VideoStreamProxy(
 	private var upstreamContentLength = -1L
 	private var upstreamContentRange: String? = null
 	private var upstreamAcceptsRanges = false
+	private var upstreamTotalLength = -1L
 
 	private var consumerActive = false
 
@@ -118,6 +123,8 @@ class VideoStreamProxy(
 			resetProducerState()
 			producerPosition = -1L
 		}
+		// transient by design: no .part file exists outside a live stream
+		partCache?.let { runCatching { it.clear() } }
 	}
 
 	private fun resetProducerState() {
@@ -129,6 +136,7 @@ class VideoStreamProxy(
 		upstreamContentLength = -1L
 		upstreamContentRange = null
 		upstreamAcceptsRanges = false
+		upstreamTotalLength = -1L
 	}
 
 	private fun cancelPipeline() {
@@ -166,7 +174,11 @@ class VideoStreamProxy(
 				return
 			}
 			ensureProducer(request.rangeStart)
-			streamToPlayer(socket, request.rangeStart)
+			if (canServeFromParts(request.rangeStart)) {
+				streamFromParts(socket, request.rangeStart)
+			} else {
+				streamToPlayer(socket, request.rangeStart)
+			}
 		} catch (e: Throwable) {
 			// aborted sockets and cancelled pipelines are normal player behavior
 		} finally {
@@ -188,7 +200,28 @@ class VideoStreamProxy(
 			if (producerThread != null && !producerFailed && producerPosition == offset) {
 				return
 			}
+			if (canServeFromParts(offset)) {
+				// backward seek into spooled territory: keep the pump feeding
+				// ahead, the consumer streams the cached prefix from .part files
+				return
+			}
 		}
+		startPipeline(offset)
+	}
+
+	private fun canServeFromParts(offset: Long): Boolean = synchronized(lock) {
+		val cache = partCache ?: return false
+		if (producerFailed) {
+			return false
+		}
+		// the live head belongs to the ring path; parts only serve lookups BEHIND it
+		if (producerThread != null && offset >= producerPosition) {
+			return false
+		}
+		(producerThread != null || producerDone) && cache.contains(offset)
+	}
+
+	private fun startPipeline(offset: Long) {
 		cancelPipeline()
 		synchronized(lock) {
 			runCatching { ring.clear() }
@@ -259,10 +292,16 @@ class VideoStreamProxy(
 				upstreamAcceptsRanges =
 					response.header("Accept-Ranges")?.equals("bytes", ignoreCase = true) == true ||
 						response.code == HTTP_PARTIAL
+				upstreamTotalLength = parseTotalLength(upstreamContentRange)
+					?: if (response.code == HTTP_OK) respBody.contentLength() else -1L
 				headersReady = true
 				lock.notifyAll()
 			}
 			var skip = if (offset > 0L && response.code == HTTP_OK) offset else 0L
+			// start spooling at the requested remote offset; for the no-store
+			// rewind case (200 on a Range request) the skipped prefix is never
+			// appended, so part indices stay aligned with remote offsets
+			partCache?.begin(offset)
 			val upstream = respBody.source()
 			val scratch = Buffer()
 			while (true) {
@@ -277,10 +316,14 @@ class VideoStreamProxy(
 				if (n == -1L) {
 					break
 				}
+				val bytes = scratch.readByteArray(n)
 				synchronized(lock) {
-					ring.write(scratch, n)
+					ring.write(bytes)
+					partCache?.let { cache ->
+						runCatching { cache.append(bytes, 0, n.toInt()) }
+					}
 					lock.notifyAll()
-					while (!cancelled && !stopped && ring.size >= RING_CAP_BYTES) {
+					while (!cancelled && !stopped && ring.size >= ringCapBytes()) {
 						lock.wait(PIPE_WAIT_MS)
 					}
 				}
@@ -371,6 +414,104 @@ class VideoStreamProxy(
 				lock.notifyAll()
 			}
 		}
+	}
+
+	private fun ringCapBytes(): Long = partCache?.ringCapBytes ?: RING_CAP_BYTES
+
+	/**
+	 * Serves a backward seek straight from the spooled .part files instead of
+	 * re-fetching the prefix upstream. The pump keeps running ahead, so reads
+	 * simply trail its growth; once the producer is done the parts document
+	 * the stream up to the real end of file. If the consumer lags a whole
+	 * disk budget behind (a part it still needs gets rotated away) the
+	 * pipeline degenerates to a plain upstream re-open at that position.
+	 */
+	private fun streamFromParts(socket: Socket, offset: Long) {
+		val cache = partCache ?: return
+		val header = buildPartsHeader(offset) ?: return
+		val out = socket.getOutputStream()
+		try {
+			out.write(header)
+			out.flush()
+		} catch (e: IOException) {
+			return
+		}
+		synchronized(lock) {
+			if (consumerActive) {
+				// same single-consumer rule as streamToPlayer
+				return
+			}
+			consumerActive = true
+		}
+		var position = offset
+		val buffer = ByteArray(SOCKET_WRITE_CHUNK_BYTES.toInt())
+		try {
+			while (!stopped) {
+				val finished = synchronized(lock) {
+					while (!producerDone && !producerFailed && cache.endPosition() <= position) {
+						lock.wait(PIPE_WAIT_MS)
+					}
+					(producerDone || producerFailed) && cache.endPosition() <= position
+				}
+				if (finished) {
+					break
+				}
+				val read = runCatching { cache.read(position, buffer, 0, buffer.size) }.getOrDefault(0)
+				if (read <= 0) {
+					startPipeline(position)
+					break
+				}
+				position += read
+				try {
+					out.write(buffer, 0, read)
+					out.flush()
+				} catch (e: IOException) {
+					break // player aborted / connection closed
+				}
+			}
+		} finally {
+			synchronized(lock) {
+				consumerActive = false
+				lock.notifyAll()
+			}
+		}
+	}
+
+	/**
+	 * Framing for a parts-served response: a synthesized 206 when the total
+	 * length is known (the player's Range expects it), a plain 200 otherwise.
+	 */
+	private fun buildPartsHeader(offset: Long): ByteArray? {
+		val status: Int
+		val contentType: String?
+		val totalLength: Long
+		synchronized(lock) {
+			if (!headersReady) {
+				return null
+			}
+			status = upstreamStatus
+			contentType = upstreamContentType
+			totalLength = upstreamTotalLength
+		}
+		if (status != HTTP_OK && status != HTTP_PARTIAL) {
+			return "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII)
+		}
+		return buildString {
+			if (totalLength > offset) {
+				append("HTTP/1.1 206 Partial Content\r\n")
+				append("Content-Range: bytes ").append(offset).append('-')
+					.append(totalLength - 1L).append('/').append(totalLength).append("\r\n")
+				append("Content-Length: ").append(totalLength - offset).append("\r\n")
+			} else {
+				append("HTTP/1.1 200 OK\r\n")
+				if (totalLength >= 0L) {
+					append("Content-Length: ").append(totalLength - offset).append("\r\n")
+				}
+			}
+			append("Content-Type: ").append(contentType ?: DEFAULT_MIME_TYPE).append("\r\n")
+			append("Accept-Ranges: bytes\r\n")
+			append("Connection: close\r\n\r\n")
+		}.toByteArray(Charsets.US_ASCII)
 	}
 
 	/**

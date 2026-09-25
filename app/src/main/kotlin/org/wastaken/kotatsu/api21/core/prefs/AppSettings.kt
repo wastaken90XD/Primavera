@@ -27,6 +27,7 @@ import org.wastaken.kotatsu.api21.core.network.proxy.ProxyType
 import org.wastaken.kotatsu.api21.core.util.ext.connectivityManager
 import org.wastaken.kotatsu.api21.booru.media.AspectRatioMode
 import org.wastaken.kotatsu.api21.booru.media.BooruLongPressAction
+import org.wastaken.kotatsu.api21.booru.media.BooruHibernateMode
 import org.wastaken.kotatsu.api21.booru.media.BooruVideoEngine
 import org.wastaken.kotatsu.api21.booru.media.DefaultPlayerMode
 import org.wastaken.kotatsu.api21.booru.media.FloatingWindowPosition
@@ -183,6 +184,22 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 	var booruVideoEngine: BooruVideoEngine
 		get() = prefs.getEnumValue(KEY_BOORU_VIDEO_ENGINE, BooruVideoEngine.LIBVLC)
 		set(value) = prefs.edit { putEnumValue(KEY_BOORU_VIDEO_ENGINE, value) }
+
+	/**
+	 * Opt-in engine hibernation while paused + hidden (default NEVER - the user
+	 * decides; timed releases burned live playback on this device before). A
+	 * real STOP always releases immediately regardless of this mode.
+	 */
+	val booruHibernateMode: BooruHibernateMode
+		get() = prefs.getEnumValue(KEY_BOORU_HIBERNATE_MODE, BooruHibernateMode.NEVER)
+
+	/** Streaming cache: payload size of a single .part chunk file, in megabytes. */
+	val booruStreamPartSizeMb: Int
+		get() = prefs.getInt(KEY_BOORU_STREAM_PART_SIZE_MB, 4).coerceIn(2, 16)
+
+	/** Streaming cache: how many .part files are kept; parts x size = the disk budget. */
+	val booruStreamPartCount: Int
+		get() = prefs.getInt(KEY_BOORU_STREAM_PART_COUNT, 6).coerceIn(2, 16)
 
 	/**
 	 * Per-source gate for the built-in media player ("media_player_source_*").
@@ -856,6 +873,9 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_MEDIA_QUEUE_REPEAT = "media_queue_repeat"
 		const val KEY_MEDIA_QUEUE_SHUFFLE = "media_queue_shuffle"
 		const val KEY_BOORU_VIDEO_ENGINE = "booru_video_engine"
+		const val KEY_BOORU_HIBERNATE_MODE = "booru_hibernate_mode"
+		const val KEY_BOORU_STREAM_PART_SIZE_MB = "booru_stream_part_size_mb"
+		const val KEY_BOORU_STREAM_PART_COUNT = "booru_stream_part_count"
 
 		/** Prefix for the per-source media-player toggles (dynamic keys, not exported). */
 		const val KEY_MEDIA_PLAYER_SOURCE_PREFIX = "media_player_source_"
@@ -885,6 +905,9 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 			KEY_MEDIA_QUEUE_SHUFFLE,
 			KEY_BOORU_LONG_PRESS_ACTION,
 			KEY_BOORU_VIDEO_ENGINE,
+			KEY_BOORU_HIBERNATE_MODE,
+			KEY_BOORU_STREAM_PART_SIZE_MB,
+			KEY_BOORU_STREAM_PART_COUNT,
 		)
 		const val KEY_GRID_SIZE_PAGES = "grid_size_pages"
 		const val KEY_REMOTE_SOURCES = "remote_sources"

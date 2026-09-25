@@ -53,6 +53,25 @@
 			app:useSimpleSummaryProvider="true" />
 
 		<ListPreference
+			android:entries="@array/booru_hibernate_mode_entries"
+			android:key="booru_hibernate_mode"
+			android:title="@string/booru_hibernate_mode"
+			app:useSimpleSummaryProvider="true" />
+
+		<SeekBarPreference
+			android:defaultValue="4"
+			android:key="booru_stream_part_size_mb"
+			android:max="16"
+			android:summary="@string/booru_stream_cache_summary"
+			android:title="@string/booru_stream_part_size" />
+
+		<SeekBarPreference
+			android:defaultValue="6"
+			android:key="booru_stream_part_count"
+			android:max="16"
+			android:title="@string/booru_stream_part_count" />
+
+		<ListPreference
 			android:entries="@array/media_player_mode_entries"
 			android:key="media_default_player_mode"
 			android:title="@string/media_default_player_mode"

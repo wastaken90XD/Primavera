@@ -25,3 +25,17 @@ enum class RepeatMode { NONE, ONE, ALL }
 enum class BooruLongPressAction { DOWNLOAD, MENU, SELECT }
 
 enum class BooruVideoEngine { LIBVLC, SYSTEM }
+
+/**
+ * Opt-in release of the video engine while merely PAUSED and hidden. NEVER
+ * (default) keeps the paused engine resident; the timed modes post the grace
+ * countdown the user picks. A real STOP (video finished, player stopped, task
+ * removed) always releases immediately, independent of this mode. Persisted
+ * by name: rename = migration.
+ */
+enum class BooruHibernateMode(val delayMs: Long) {
+	NEVER(0L),
+	THIRTY_SECONDS(30_000L),
+	TWO_MINUTES(120_000L),
+	TEN_MINUTES(600_000L),
+}

@@ -33,7 +33,9 @@ import org.wastaken.kotatsu.api21.core.network.MangaHttpClient
 import org.wastaken.kotatsu.api21.core.parser.MangaRepository
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.core.util.ext.checkNotificationPermission
+import org.wastaken.kotatsu.api21.reader.ui.media.StreamPartCache
 import org.wastaken.kotatsu.api21.reader.ui.media.VideoStreamProxy
+import java.io.File
 import java.io.IOException
 import javax.inject.Inject
 import kotlin.coroutines.resume
@@ -430,6 +432,18 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 
 	// region video engine
 
+	/**
+	 * Streaming cache from Settings: part size x part count is the disk budget,
+	 * the proxy keeps a quarter of it as the in-memory read-ahead ring. Parts
+	 * are spooled while the stream is consumed and purged on stop/new video -
+	 * StreamPartCache owns the hygiene contract.
+	 */
+	private fun createStreamPartCache(): StreamPartCache = StreamPartCache(
+		directory = File(cacheDir, DIR_STREAM_PARTS),
+		partSizeBytes = settings.booruStreamPartSizeMb.toLong() * 1024L * 1024L,
+		maxParts = settings.booruStreamPartCount,
+	)
+
 	private fun openVideo(item: BooruMediaItem) {
 		val engine = settings.booruVideoEngine
 		// libVLC: stop-only so the instance survives across queue items;
@@ -441,7 +455,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		hibernatedItemId = null
 		hibernatedResumeMs = 0
 		val headers = BooruStreamHeaders.forStream(mangaRepositoryFactory, mangaLoaderContext, item.source, item.url)
-		val streamProxy = VideoStreamProxy(okHttpClient)
+		val streamProxy = VideoStreamProxy(okHttpClient, createStreamPartCache())
 		val localUrl = try {
 			streamProxy.start(item.url, item.source, headers)
 		} catch (e: Exception) {
@@ -630,26 +644,30 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	// NewPipe PlayerService model: the service shell (queue + notification) is
 	// cheap, the video engine is not. While the user is only browsing/queueing
 	// there must be no decoder, demuxer or proxy resident in RAM; the engine
-	// materializes again on the next play touch. A grace delay covers activity
-	// rotation and the floating <-> full-screen handoff, both of which detach
-	// every surface for a moment by design.
+	// materializes again on the next play touch. This is now strictly opt-in:
+	// the pause grace comes from Settings (BooruHibernateMode, default NEVER)
+	// because unrequested timers kept firing into live playback on this device,
+	// while a real STOP always releases immediately, event-driven - no timer.
+	// The graceful cover for rotation and the floating <-> full-screen blink
+	// only matters when the user has actually armed a timed mode.
 
 	private fun scheduleHibernateIfIdle() {
 		cancelHibernate()
+		// user-controlled (Settings -> Media player -> Player hibernation),
+		// default NEVER: timers kept killing live playback on this device, so
+		// releasing a paused engine is now an explicit choice, not a surprise
+		val mode = settings.booruHibernateMode
+		if (mode == BooruHibernateMode.NEVER) return
 		// PLAYING is tracked app-side: the guarded RELEASED-before-check race is
 		// native isPlaying lagging a just-issued resume/start by a few frames,
 		// which is exactly the window an outdated pause timer fires in
 		if (isVideoPlaying() || playbackState == PlaybackState.PLAYING ||
 			playbackState == PlaybackState.PREPARING) return
-		// a real STOP (state IDLE, not a pause) frees the engine almost at once:
-		// there is no rotation/handoff grace to preserve because the user is not
-		// watching anything, and the engine is the memory hog on this device
-		val idleStop = playbackState == PlaybackState.IDLE
-		if (!idleStop && (boundSurface != null || boundSurfaceTexture != null)) return
+		if (boundSurface != null || boundSurfaceTexture != null) return
 		if (vlcPlayer == null && mediaPlayer == null) return
-		val task = Runnable { hibernateEngine(idleStop) }
+		val task = Runnable { hibernateEngine() }
 		hibernateTask = task
-		handler.postDelayed(task, if (idleStop) HIBERNATE_IDLE_DELAY_MS else HIBERNATE_DELAY_MS)
+		handler.postDelayed(task, mode.delayMs)
 	}
 
 	private fun cancelHibernate() {
@@ -689,9 +707,11 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 					playIndex(next)
 				} else {
 					setState(PlaybackState.IDLE)
-					// the video really STOPPED (finished, not paused), schedule
-					// the near-instant idle teardown even while the screen is up
-					scheduleHibernateIfIdle()
+					// the video really STOPPED (finished, not paused): release
+					// immediately, event-driven - no timer involved, no grace
+					// window to preserve because nothing is playing; the replay
+					// touch re-materializes the engine from the ground up
+					hibernateEngine(allowSurfaceBound = true)
 				}
 			}
 		}
@@ -825,11 +845,8 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		/** Covers slow booru CDNs + moov-at-end MP4 probes through the proxy. */
 		private const val PREPARE_TIMEOUT_MS = 30_000L
 
-		/** Grace before engine teardown: comfortably above a rotation/handoff blink. */
-		private const val HIBERNATE_DELAY_MS = 30_000L
-
-		/** Delay after a real STOP (state IDLE, not a pause): kill the RAM hog fast. */
-		private const val HIBERNATE_IDLE_DELAY_MS = 2_000L
+		/** Directory (inside cacheDir) holding the transient stream .part files. */
+		private const val DIR_STREAM_PARTS = "stream_parts"
 
 		/** Rotation-survival cache ceiling for GIF payloads (Movie owns its own copy). */
 		private const val GIF_CACHE_MAX_BYTES = 8 * 1024 * 1024

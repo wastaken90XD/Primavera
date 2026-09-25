@@ -291,6 +291,12 @@
 		<item>libVLC (recommended)</item>
 		<item>System (legacy)</item>
 	</string-array>
+	<string-array name="booru_hibernate_mode_entries">
+		<item>@string/booru_hibernate_never</item>
+		<item>@string/booru_hibernate_30s</item>
+		<item>@string/booru_hibernate_2m</item>
+		<item>@string/booru_hibernate_10m</item>
+	</string-array>
 	<string-array name="media_gif_tap_entries">
 		<item>@string/media_tap_load_inline</item>
 		<item>@string/media_tap_open_detail</item>

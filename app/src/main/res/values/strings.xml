@@ -1069,5 +1069,13 @@
 	<string name="media_sources_search_hint">Search sources</string>
 	<string name="booru_long_press_action">Long-press action</string>
 	<string name="booru_video_engine">Video engine</string>
+	<string name="booru_hibernate_mode">Player hibernation</string>
+	<string name="booru_hibernate_never">Never (recommended)</string>
+	<string name="booru_hibernate_30s">30 seconds after pausing in background</string>
+	<string name="booru_hibernate_2m">2 minutes after pausing in background</string>
+	<string name="booru_hibernate_10m">10 minutes after pausing in background</string>
+	<string name="booru_stream_part_size">Stream part size (MB)</string>
+	<string name="booru_stream_part_count">Stream part count</string>
+	<string name="booru_stream_cache_summary">Video streams are cached to storage in parts while playing; parts are deleted when the player stops</string>
 	<string name="media_sources_empty">No sources found</string>
 </resources>
