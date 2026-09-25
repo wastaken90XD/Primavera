@@ -434,9 +434,10 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 
 	/**
 	 * Streaming cache from Settings: part size x part count is the disk budget,
-	 * the proxy keeps a quarter of it as the in-memory read-ahead ring. Parts
-	 * are spooled while the stream is consumed and purged on stop/new video -
-	 * StreamPartCache owns the hygiene contract.
+	 * and on this 1.3GB device the parts ARE the read-ahead - the proxy serves
+	 * the player straight from storage, memory only ever holds pump/socket
+	 * scratch buffers. Parts are spooled while the stream is consumed and
+	 * purged on stop/new video - StreamPartCache owns the hygiene contract.
 	 */
 	private fun createStreamPartCache(): StreamPartCache = StreamPartCache(
 		directory = File(cacheDir, DIR_STREAM_PARTS),

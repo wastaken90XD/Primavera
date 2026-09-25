@@ -34,19 +34,21 @@ import java.util.regex.Pattern
  * naturally throttles the upstream read once the ring is full (no bandwidth
  * wasted while paused).
  *
- * Spill-over persistence (optional, [partCache]): as bytes pass through the
- * pump they are also spooled into rotating .part chunk files (see
- * [StreamPartCache]; ~3/4 of the cache budget, ring shrinks to ~1/4 of it).
- * Backward seeks then stream from the parts instead of re-fetching the
- * prefix. The parts are transient: purged on every start()/stop().
- * The readers' legacy zero-persistence path is unchanged: no [partCache],
- * nothing touches disk, ring keeps its old 6MB cap.
+ * Spill-over mode (optional, [partCache]): as bytes pass through the pump
+ * they are also spooled into rotating .part chunk files on disk (see
+ * [StreamPartCache]) and ALL consumers read from the parts - on a 1.3GB
+ * device the disk is the read-ahead, the memory ring is not even written,
+ * and the pump back-pressures on its disk-backed lead over the player
+ * instead of on heap usage. Backward seeks into the spooled window no longer
+ * need the network at all. The parts are transient: purged on every
+ * start()/stop(). The readers' legacy zero-persistence path is unchanged:
+ * no [partCache], nothing touches disk, memory ring keeps its old 6MB cap.
  *
  * Seeking: the framework player re-connects with a Range header on seek.
  * Offsets already spooled are answered from the parts; anything else re-opens
  * upstream with the same byte offset; if the CDN ignores Range (200 instead
- * of 206) the pump skips the prefix before filling the ring, so non-range
- * servers still work, just seek slower.
+ * of 206) the pump skips the prefix before spooling, so non-range servers
+ * still work, just seek slower.
  */
 class VideoStreamProxy(
 	private val okHttpClient: OkHttpClient,
@@ -79,6 +81,9 @@ class VideoStreamProxy(
 	private var upstreamTotalLength = -1L
 
 	private var consumerActive = false
+
+	/** Remote offset the parts consumer has read up to; drives pump backpressure. */
+	private var consumerPosition = -1L
 
 	private val ring = Buffer()
 	private val clients = HashSet<Socket>()
@@ -118,11 +123,12 @@ class VideoStreamProxy(
 			}
 			clients.clear()
 		}
-		synchronized(lock) {
-			runCatching { ring.clear() }
-			resetProducerState()
-			producerPosition = -1L
-		}
+			synchronized(lock) {
+				runCatching { ring.clear() }
+				resetProducerState()
+				producerPosition = -1L
+				consumerPosition = -1L
+			}
 		// transient by design: no .part file exists outside a live stream
 		partCache?.let { runCatching { it.clear() } }
 	}
@@ -174,7 +180,9 @@ class VideoStreamProxy(
 				return
 			}
 			ensureProducer(request.rangeStart)
-			if (canServeFromParts(request.rangeStart)) {
+			if (partCache != null) {
+				// disk-first: parts are the read-ahead, even at the live head;
+				// the consumer waits for coverage growth where needed
 				streamFromParts(socket, request.rangeStart)
 			} else {
 				streamToPlayer(socket, request.rangeStart)
@@ -197,28 +205,27 @@ class VideoStreamProxy(
 	 */
 	private fun ensureProducer(offset: Long) {
 		synchronized(lock) {
-			if (producerThread != null && !producerFailed && producerPosition == offset) {
-				return
-			}
-			if (canServeFromParts(offset)) {
-				// backward seek into spooled territory: keep the pump feeding
-				// ahead, the consumer streams the cached prefix from .part files
-				return
+			if (producerThread != null && !producerFailed) {
+				val cache = partCache
+				if (cache != null) {
+					// parts serve any covered position of the live stream; the
+					// pump keeps feeding ahead. Only a forward seek PAST the
+					// spooled head falls through to a restart below.
+					if (offset <= cache.endPosition()) {
+						return
+					}
+				} else if (producerPosition == offset) {
+					return
+				}
+			} else if (!producerFailed && producerDone) {
+				val cache = partCache
+				if (cache != null && offset <= cache.endPosition()) {
+					// fully spooled: replay any covered position from disk
+					return
+				}
 			}
 		}
 		startPipeline(offset)
-	}
-
-	private fun canServeFromParts(offset: Long): Boolean = synchronized(lock) {
-		val cache = partCache ?: return false
-		if (producerFailed) {
-			return false
-		}
-		// the live head belongs to the ring path; parts only serve lookups BEHIND it
-		if (producerThread != null && offset >= producerPosition) {
-			return false
-		}
-		(producerThread != null || producerDone) && cache.contains(offset)
 	}
 
 	private fun startPipeline(offset: Long) {
@@ -228,6 +235,7 @@ class VideoStreamProxy(
 			cancelled = false
 			resetProducerState()
 			producerPosition = offset
+			consumerPosition = offset
 			lock.notifyAll()
 		}
 		val url = remoteUrl ?: return
@@ -301,7 +309,11 @@ class VideoStreamProxy(
 			// start spooling at the requested remote offset; for the no-store
 			// rewind case (200 on a Range request) the skipped prefix is never
 			// appended, so part indices stay aligned with remote offsets
-			partCache?.begin(offset)
+			val cache = partCache
+			cache?.begin(offset)
+			synchronized(lock) {
+				consumerPosition = offset
+			}
 			val upstream = respBody.source()
 			val scratch = Buffer()
 			while (true) {
@@ -318,13 +330,24 @@ class VideoStreamProxy(
 				}
 				val bytes = scratch.readByteArray(n)
 				synchronized(lock) {
-					ring.write(bytes)
-					partCache?.let { cache ->
+					if (cache != null) {
+						// disk-first mode: parts are the read-ahead, no heap copy
 						runCatching { cache.append(bytes, 0, n.toInt()) }
+					} else {
+						ring.write(bytes)
 					}
 					lock.notifyAll()
-					while (!cancelled && !stopped && ring.size >= ringCapBytes()) {
-						lock.wait(PIPE_WAIT_MS)
+					if (cache != null) {
+						// backpressure on the disk-backed lead instead of the ring
+						while (!cancelled && !stopped &&
+							cache.endPosition() - consumerPosition >= cache.totalBytes
+						) {
+							lock.wait(PIPE_WAIT_MS)
+						}
+					} else {
+						while (!cancelled && !stopped && ring.size >= RING_CAP_BYTES) {
+							lock.wait(PIPE_WAIT_MS)
+						}
 					}
 				}
 				if (isCancelledOrStopped()) {
@@ -416,15 +439,14 @@ class VideoStreamProxy(
 		}
 	}
 
-	private fun ringCapBytes(): Long = partCache?.ringCapBytes ?: RING_CAP_BYTES
-
 	/**
-	 * Serves a backward seek straight from the spooled .part files instead of
-	 * re-fetching the prefix upstream. The pump keeps running ahead, so reads
-	 * simply trail its growth; once the producer is done the parts document
-	 * the stream up to the real end of file. If the consumer lags a whole
-	 * disk budget behind (a part it still needs gets rotated away) the
-	 * pipeline degenerates to a plain upstream re-open at that position.
+	 * Streams the player from the spooled .part files: with a part cache the
+	 * disk IS the read-ahead (live head included), so nothing waits on the
+	 * in-memory ring - reads just trail the pump's growth and the pump
+	 * back-pressures against [consumerPosition] only at the full disk budget.
+	 * If the consumer lags a whole disk budget behind (a part it still needs
+	 * gets rotated away) the pipeline degenerates to an upstream re-open at
+	 * that position.
 	 */
 	private fun streamFromParts(socket: Socket, offset: Long) {
 		val cache = partCache ?: return
@@ -462,6 +484,10 @@ class VideoStreamProxy(
 					break
 				}
 				position += read
+				synchronized(lock) {
+					consumerPosition = position
+					lock.notifyAll() // un-throttle the back-pressured pump
+				}
 				try {
 					out.write(buffer, 0, read)
 					out.flush()
@@ -486,14 +512,19 @@ class VideoStreamProxy(
 		val contentType: String?
 		val totalLength: Long
 		synchronized(lock) {
-			if (!headersReady) {
+			// same wait as the ring path: a pipeline restart may still be
+			// fetching its framing when the player connects
+			while (!headersReady && !producerFailed && !stopped) {
+				lock.wait(PIPE_WAIT_MS)
+			}
+			if (stopped) {
 				return null
 			}
 			status = upstreamStatus
 			contentType = upstreamContentType
 			totalLength = upstreamTotalLength
 		}
-		if (status != HTTP_OK && status != HTTP_PARTIAL) {
+		if (producerFailed || (status != HTTP_OK && status != HTTP_PARTIAL)) {
 			return "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII)
 		}
 		return buildString {

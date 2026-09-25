@@ -7,11 +7,12 @@ import java.io.RandomAccessFile
 /**
  * Transient spill-over store for [VideoStreamProxy]: as the pump streams the
  * remote file, every byte is additionally spooled into rotating ".part" chunk
- * files on disk while only the newest slice lives in the proxy's in-memory
- * ring - ~75% storage / ~25% memory of one shared budget, the small-scale
- * version of ExoPlayer SimpleCache's spans (disk) + read-ahead (memory).
- * Backward seeks are then served from the parts instead of re-fetching the
- * prefix upstream, which is the slow path on rate-limited booru CDNs.
+ * files on disk. On RAM-starved devices the parts ARE the read-ahead: the
+ * proxy serves consumers straight from disk (in-memory ring stays empty),
+ * back-pressuring the pump only once it leads the player by the whole part
+ * budget - pause then keeps megabytes of cushion without touching the heap.
+ * The small-scale version of ExoPlayer SimpleCache's spans, minus its index
+ * (the spool is one contiguous stream).
  *
  * Hygiene contract (player UX spec):
  *  - [clear] leaves NO .part file behind; [begin] first purges the directory
@@ -53,12 +54,9 @@ class StreamPartCache(
 	/** Disk gone full / unwritable: degrade to plain streaming without parts. */
 	private var writeDisabled = false
 
-	private val totalBytes: Long
+	/** Disk budget: what the pump may spool ahead of the player before throttling. */
+	val totalBytes: Long
 		get() = partSizeBytes * maxParts
-
-	/** Memory share of the same budget: the live ring cap for the proxy. */
-	val ringCapBytes: Long
-		get() = (totalBytes / 4L).coerceIn(MIN_RING_BYTES, MAX_RING_BYTES)
 
 	@WorkerThread
 	fun begin(baseOffset: Long) {
@@ -210,11 +208,5 @@ class StreamPartCache(
 		if (reader != null) {
 			readerIndex = index
 		}
-	}
-
-	private companion object {
-
-		private const val MIN_RING_BYTES = 1L * 1024L * 1024L
-		private const val MAX_RING_BYTES = 8L * 1024L * 1024L
 	}
 }
