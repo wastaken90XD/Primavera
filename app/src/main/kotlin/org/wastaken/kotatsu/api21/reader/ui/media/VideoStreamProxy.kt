@@ -329,11 +329,13 @@ class VideoStreamProxy(
 					break
 				}
 				val bytes = scratch.readByteArray(n)
+				if (cache != null) {
+					// flash I/O must NOT hold the proxy lock: a slow eMMC write
+					// would stall every waiting consumer into a visible flicker
+					runCatching { cache.append(bytes, 0, n.toInt()) }
+				}
 				synchronized(lock) {
-					if (cache != null) {
-						// disk-first mode: parts are the read-ahead, no heap copy
-						runCatching { cache.append(bytes, 0, n.toInt()) }
-					} else {
+					if (cache == null) {
 						ring.write(bytes)
 					}
 					lock.notifyAll()
@@ -458,13 +460,9 @@ class VideoStreamProxy(
 		} catch (e: IOException) {
 			return
 		}
-		synchronized(lock) {
-			if (consumerActive) {
-				// same single-consumer rule as streamToPlayer
-				return
-			}
-			consumerActive = true
-		}
+		// NOTE: no single-consumer gate here (unlike streamToPlayer). Parts are
+		// invariant byte ranges on disk, so VLC's parallel probe connections
+		// each get their own reader handle instead of an empty, rejected body.
 		var position = offset
 		val buffer = ByteArray(SOCKET_WRITE_CHUNK_BYTES.toInt())
 		try {
@@ -497,7 +495,6 @@ class VideoStreamProxy(
 			}
 		} finally {
 			synchronized(lock) {
-				consumerActive = false
 				lock.notifyAll()
 			}
 		}
@@ -728,8 +725,8 @@ class VideoStreamProxy(
 
 		/** Max bytes buffered ahead of the player (okio segments, never one big array). */
 		private const val RING_CAP_BYTES = 6L * 1024L * 1024L
-		private const val PIPE_CHUNK_BYTES = 64L * 1024L
-		private const val SOCKET_WRITE_CHUNK_BYTES = 64L * 1024L
+		private const val PIPE_CHUNK_BYTES = 128L * 1024L
+		private const val SOCKET_WRITE_CHUNK_BYTES = 256L * 1024L
 		private const val PIPE_WAIT_MS = 1_000L
 		private const val SOCKET_TIMEOUT_MS = 30_000
 

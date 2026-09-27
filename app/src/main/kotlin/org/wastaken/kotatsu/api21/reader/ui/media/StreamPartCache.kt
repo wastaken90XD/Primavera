@@ -45,8 +45,6 @@ class StreamPartCache(
 
 	private var writer: RandomAccessFile? = null
 	private var writerIndex = -1L
-	private var reader: RandomAccessFile? = null
-	private var readerIndex = -1L
 
 	/** Indices of parts currently on disk; retained window = newest [maxParts]. */
 	private val present = HashSet<Long>()
@@ -114,6 +112,10 @@ class StreamPartCache(
 
 	/**
 	 * Read up to [length] bytes at remote [position] into [dest] at [offset].
+	 * Every call uses its own RandomAccessFile handle: VLC keeps several probe
+	 * connections alive in parallel, and a shared handle's seek() would be
+	 * corrupted by concurrent consumers (seen as rebuffer flicker). Handle
+	 * churn is one open+seek+close per chunk - trivial next to flash I/O.
 	 * Never crosses a part boundary in one call; returns 0 when not covered.
 	 */
 	@WorkerThread
@@ -129,21 +131,19 @@ class StreamPartCache(
 				(partSizeBytes - inPart).toInt(),
 				(writePos - position).toInt(),
 			)
-			if (readerIndex != index) {
-				openReader(index)
-			}
-			val r = reader ?: return 0
 			return runCatching {
-				r.seek(inPart.toLong())
-				var total = 0
-				while (total < n) {
-					val rd = r.read(dest, offset + total, n - total)
-					if (rd <= 0) {
-						break
+				RandomAccessFile(partFile(index), "r").use { r ->
+					r.seek(inPart.toLong())
+					var total = 0
+					while (total < n) {
+						val rd = r.read(dest, offset + total, n - total)
+						if (rd <= 0) {
+							break
+						}
+						total += rd
 					}
-					total += rd
+					total
 				}
-				total
 			}.getOrDefault(0)
 		}
 	}
@@ -159,9 +159,6 @@ class StreamPartCache(
 		runCatching { writer?.close() }
 		writer = null
 		writerIndex = -1L
-		runCatching { reader?.close() }
-		reader = null
-		readerIndex = -1L
 		present.clear()
 		// SimpleCache rule: the dir is ours alone, purge unrecognized leftovers
 		directory.listFiles()?.forEach { file -> file.deleteRecursively() }
@@ -187,26 +184,9 @@ class StreamPartCache(
 				break // only the freshly opened part is left: nothing to evict
 			}
 			present.remove(oldest)
+			// readers hold their own per-call handles and tolerate a rotated-away
+			// file by returning 0, so eviction never needs to close anything here
 			runCatching { partFile(oldest).delete() }
-			if (readerIndex == oldest) {
-				runCatching { reader?.close() }
-				reader = null
-				readerIndex = -1L
-			}
-		}
-	}
-
-	private fun openReader(index: Long) {
-		runCatching { reader?.close() }
-		reader = null
-		readerIndex = -1L
-		val file = partFile(index)
-		if (!file.exists()) {
-			return
-		}
-		reader = runCatching { RandomAccessFile(file, "r") }.getOrNull()
-		if (reader != null) {
-			readerIndex = index
 		}
 	}
 }

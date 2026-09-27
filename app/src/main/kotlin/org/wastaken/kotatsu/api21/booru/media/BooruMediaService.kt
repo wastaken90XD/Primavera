@@ -102,6 +102,10 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	private var mediaPlayer: MediaPlayer? = null
 	private var vlcPlayer: BooruVlcPlayer? = null
 	private var proxy: VideoStreamProxy? = null
+
+	/** Identity of the item the warm proxy streams, plus its loopback URL. */
+	private var proxyItemId: Long = -1L
+	private var proxyLocalUrl: String? = null
 	private var boundSurface: Surface? = null
 	private var boundSurfaceTexture: SurfaceTexture? = null
 	private var boundTargetWidth = 0
@@ -213,6 +217,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 
 	override fun onDestroy() {
 		releaseVideo()
+		stopStreamProxy()
 		queue.removeListener(this)
 		ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
 		super.onDestroy()
@@ -271,6 +276,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 			openVideo(item)
 		} else {
 			releaseVideo() // GIFs render in the view layer; state only tracks "current"
+			stopStreamProxy() // a GIF is a media switch: purge the video stream parts
 			setState(PlaybackState.PLAYING)
 		}
 	}
@@ -424,6 +430,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	fun stopPlaybackAndQueueClear() {
 		queue.clear()
 		releaseVideo()
+		stopStreamProxy()
 		setState(PlaybackState.IDLE)
 		stopSelf()
 	}
@@ -456,16 +463,28 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		hibernatedItemId = null
 		hibernatedResumeMs = 0
 		val headers = BooruStreamHeaders.forStream(mangaRepositoryFactory, mangaLoaderContext, item.source, item.url)
-		val streamProxy = VideoStreamProxy(okHttpClient, createStreamPartCache())
-		val localUrl = try {
-			streamProxy.start(item.url, item.source, headers)
-		} catch (e: Exception) {
-			streamProxy.stop()
-			setState(PlaybackState.IDLE)
-			notifyError(item, 0, 0)
-			return
+		// warm-proxy reuse: replaying the SAME item (toggle replay, prev->next
+		// back-and-forth, engine re-materialization after a stop) skips proxy
+		// and CDN startup entirely; the spooled parts are still on disk
+		val warm = proxyLocalUrl?.takeIf { proxyItemId == item.id && proxy != null }
+		val localUrl = if (warm != null) {
+			warm
+		} else {
+			stopStreamProxy()
+			val streamProxy = VideoStreamProxy(okHttpClient, createStreamPartCache())
+			val started = try {
+				streamProxy.start(item.url, item.source, headers)
+			} catch (e: Exception) {
+				streamProxy.stop()
+				setState(PlaybackState.IDLE)
+				notifyError(item, 0, 0)
+				return
+			}
+			proxy = streamProxy
+			proxyItemId = item.id
+			proxyLocalUrl = started
+			started
 		}
-		proxy = streamProxy
 		videoLooping = settings.isMediaVideoLoop || queue.repeatMode == RepeatMode.ONE
 		when (engine) {
 			BooruVideoEngine.LIBVLC -> openVideoVlc(item, localUrl)
@@ -745,9 +764,18 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		// GIF bytes are the biggest Java-heap object this service ever holds;
 		// never carry them across a media switch
 		gifBytesCache = null
+		// the stream proxy deliberately survives engine release: replaying the
+		// same item is then instant (parts on disk), and only an item switch
+		// (openVideo for a different id / GIF), queue clear or service teardown
+		// stops it - StreamPartCache purges its files on stop, per its contract
+		abandonAudioFocus()
+	}
+
+	private fun stopStreamProxy() {
 		proxy?.stop()
 		proxy = null
-		abandonAudioFocus()
+		proxyItemId = -1L
+		proxyLocalUrl = null
 	}
 
 	// endregion
