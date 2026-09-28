@@ -104,6 +104,12 @@ class StreamPartCache(
 	/** Exclusive remote offset where contiguous coverage currently ends. */
 	fun endPosition(): Long = synchronized(lock) { writePos }
 
+	/** Inclusive lowest remote offset still retained (oldest part's start). */
+	fun lowestPosition(): Long = synchronized(lock) {
+		val oldest = present.minOrNull() ?: return writePos // empty: both ends coincide
+		baseFor(oldest)
+	}
+
 	/** True when [position] lies inside the retained, contiguous window. */
 	fun contains(position: Long): Boolean = synchronized(lock) {
 		val oldest = present.minOrNull() ?: return false // no parts on disk, nothing covered

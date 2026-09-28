@@ -205,24 +205,22 @@ class VideoStreamProxy(
 	 */
 	private fun ensureProducer(offset: Long) {
 		synchronized(lock) {
-			if (producerThread != null && !producerFailed) {
-				val cache = partCache
-				if (cache != null) {
-					// parts serve any covered position of the live stream; the
-					// pump keeps feeding ahead. Only a forward seek PAST the
-					// spooled head falls through to a restart below.
-					if (offset <= cache.endPosition()) {
+			val cache = partCache
+			if (cache != null && !producerFailed) {
+				val lo = cache.lowestPosition()
+				val hi = cache.endPosition()
+				if (producerThread != null) {
+					// inside the spooled window, or exactly at its live head
+					// (waits for growth): keep the pipeline, stream from parts
+					if (offset in lo..hi) {
 						return
 					}
-				} else if (producerPosition == offset) {
+				} else if (producerDone && offset in lo until hi) {
+					// fully spooled: replay any retained position from disk
 					return
 				}
-			} else if (!producerFailed && producerDone) {
-				val cache = partCache
-				if (cache != null && offset <= cache.endPosition()) {
-					// fully spooled: replay any covered position from disk
-					return
-				}
+			} else if (producerThread != null && !producerFailed && producerPosition == offset) {
+				return
 			}
 		}
 		startPipeline(offset)
@@ -478,7 +476,12 @@ class VideoStreamProxy(
 				}
 				val read = runCatching { cache.read(position, buffer, 0, buffer.size) }.getOrDefault(0)
 				if (read <= 0) {
-					startPipeline(position)
+					// a part this connection needs was rotated away (it lagged a
+					// whole disk budget behind). Consumers must NEVER restart the
+					// pipeline themselves: parallel VLC connections would fight
+					// over purging and the audio comes out as rapid stop-start
+					// bursts. End this stream; the client re-GETs and
+					// ensureProducer() decides with the CURRENT cache state.
 					break
 				}
 				position += read
