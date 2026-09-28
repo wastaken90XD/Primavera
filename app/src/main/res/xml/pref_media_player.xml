@@ -63,13 +63,17 @@
 			android:key="booru_stream_part_size_mb"
 			android:max="16"
 			android:summary="@string/booru_stream_cache_summary"
-			android:title="@string/booru_stream_part_size" />
+			android:title="@string/booru_stream_part_size"
+			app:min="2"
+			app:showSeekBarValue="true" />
 
 		<SeekBarPreference
 			android:defaultValue="6"
 			android:key="booru_stream_part_count"
 			android:max="16"
-			android:title="@string/booru_stream_part_count" />
+			android:title="@string/booru_stream_part_count"
+			app:min="2"
+			app:showSeekBarValue="true" />
 
 		<ListPreference
 			android:entries="@array/media_player_mode_entries"

@@ -157,24 +157,34 @@ class BooruVlcPlayer(context: Context) {
 	companion object {
 
 		/**
+		 * VLC input cache (ms). Raised from 800 to 2500: the loopback proxy
+		 * answers from disk parts at ~zero latency, so deep VLC-side buffering
+		 * costs nothing and it is THE documented fix for AudioTrack underrun
+		 * ("audio pops, stops, plays fast to catch up" - VLC's own Android
+		 * docs recommend raising network caching on slow links, and Android's
+		 * AudioTrack reference attributes those glitches to shallow buffers).
+		 * Buffered bytes = bitrate x cache time: 2500ms x 4Mbps ~= 1.3MB,
+		 * negligible even on this 1.3GB tablet (and the proxy itself only
+		 * holds pump/socket scratch in RAM nowadays).
+		 */
+		const val NETWORK_CACHING_MS = 2500
+
+		/**
 		 * vlc-android's network defaults: generous caching so slow booru CDNs
 		 * (through the loopback proxy) don't starve the demuxer, reconnect on
 		 * flaky links, no late-frame dropping / frame skipping on weak CPUs.
+		 * --no-audio-time-stretch: vlcdocs flag time stretching as a known
+		 * audio-lag source on slow devices (and it is the code path that makes
+		 * audio "speed up to catch up" - skip the whole catch-up mechanism).
 		 */
 		private val VLC_OPTIONS = arrayListOf(
 			"--no-drop-late-frames",
 			"--no-skip-frames",
 			"--rtsp-tcp",
-			"--network-caching=800",
+			"--network-caching=$NETWORK_CACHING_MS",
+			"--no-audio-time-stretch",
 			"--http-reconnect",
 			"--http-continuous",
 		)
-
-		/**
-		 * 800ms keeps the network buffer at roughly half the 1500ms default:
-		 * buffered bytes = bitrate x cache time, and this build targets a
-		 * low-RAM 2014 tablet where that reserve is pure OOM margin.
-		 */
-		const val NETWORK_CACHING_MS = 800
 	}
 }
