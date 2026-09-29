@@ -117,7 +117,19 @@ class ReadButtonDelegate(
 			if (isIncognitoMode) {
 				intentBuilder.incognito()
 			}
-			router.openReader(intentBuilder.build())
+			val intent = intentBuilder.build()
+			if (viewModel.isMediaRoutingEnabled(manga)) {
+				// media posts never enter the reader: resolve + route
+				// to the booru player; static posts fall back to the reader
+				viewModel.routeBooruPost(manga) {
+					router.openReader(intent)
+					if (isIncognitoMode) {
+						Toast.makeText(context, R.string.incognito_mode, Toast.LENGTH_SHORT).show()
+					}
+				}
+				return
+			}
+			router.openReader(intent)
 			if (isIncognitoMode) {
 				Toast.makeText(context, R.string.incognito_mode, Toast.LENGTH_SHORT).show()
 			}

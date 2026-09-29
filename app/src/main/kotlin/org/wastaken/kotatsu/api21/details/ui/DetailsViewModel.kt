@@ -4,6 +4,9 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import org.wastaken.kotatsu.api21.booru.media.BooruMediaItem
+import org.wastaken.kotatsu.api21.booru.media.BooruMediaResolver
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -18,14 +21,17 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.plus
+import android.net.Uri
 import org.wastaken.kotatsu.api21.R
 import org.wastaken.kotatsu.api21.bookmarks.domain.BookmarksRepository
 import org.wastaken.kotatsu.api21.core.model.getPreferredBranch
 import org.wastaken.kotatsu.api21.core.nav.MangaIntent
+import org.wastaken.kotatsu.api21.core.parser.MangaRepository
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.core.prefs.ListMode
 import org.wastaken.kotatsu.api21.core.prefs.TriStateOption
 import org.wastaken.kotatsu.api21.core.ui.util.ReversibleAction
+import org.wastaken.kotatsu.api21.core.util.ext.MutableEventFlow
 import org.wastaken.kotatsu.api21.core.util.ext.call
 import org.wastaken.kotatsu.api21.core.util.ext.computeSize
 import org.wastaken.kotatsu.api21.core.util.ext.onEachWhile
@@ -47,8 +53,10 @@ import org.wastaken.kotatsu.api21.local.data.LocalStorageChanges
 import org.wastaken.kotatsu.api21.local.domain.DeleteLocalMangaUseCase
 import org.wastaken.kotatsu.api21.local.domain.model.LocalManga
 import org.koitharu.kotatsu.parsers.model.Manga
+import org.wastaken.kotatsu.api21.core.model.isLocal
 import org.koitharu.kotatsu.parsers.util.findById
 import org.koitharu.kotatsu.parsers.util.runCatchingCancellable
+import org.wastaken.kotatsu.api21.reader.ui.PageSaveHelper
 import org.wastaken.kotatsu.api21.reader.ui.ReaderState
 import org.wastaken.kotatsu.api21.scrobbling.common.domain.Scrobbler
 import org.wastaken.kotatsu.api21.scrobbling.common.domain.model.ScrobblingInfo
@@ -72,6 +80,7 @@ class DetailsViewModel @Inject constructor(
 	private val detailsLoadUseCase: DetailsLoadUseCase,
 	private val progressUpdateUseCase: ProgressUpdateUseCase,
 	private val readingTimeUseCase: ReadingTimeUseCase,
+	private val mangaRepositoryFactory: MangaRepository.Factory,
 	statsRepository: StatsRepository,
 ) : ChaptersPagesViewModel(
 	settings = settings,
@@ -86,6 +95,31 @@ class DetailsViewModel @Inject constructor(
 	private val intent = MangaIntent(savedStateHandle)
 	private var loadingJob: Job
 	val mangaId = intent.mangaId
+	val onImageSaved = MutableEventFlow<Collection<Uri>>()
+
+	/** Route to the booru full-screen player (GIF/video posts from the read button). */
+	val onBooruMediaRoute = MutableEventFlow<BooruMediaItem>()
+
+	/**
+	 * Booru read-button routing (media spec): media posts never open the reader,
+	 * they resolve to the booru player; static posts run [fallback] (main thread).
+	 */
+	/** Read-button gate: only media-player-enabled, non-local posts take the player route. */
+	fun isMediaRoutingEnabled(manga: Manga): Boolean =
+		!manga.isLocal && settings.isMediaPlayerEnabledForSource(manga.source)
+
+	fun routeBooruPost(manga: Manga, fallback: () -> Unit) {
+		viewModelScope.launch(Dispatchers.Main) {
+			val item = runCatching {
+				BooruMediaResolver.resolve(mangaRepositoryFactory, manga)
+			}.getOrNull()
+			if (item != null) {
+				onBooruMediaRoute.call(item)
+			} else {
+				fallback()
+			}
+		}
+	}
 
 	init {
 		mangaDetails.value = intent.manga?.let { MangaDetails(it) }
@@ -198,6 +232,28 @@ class DetailsViewModel @Inject constructor(
 	fun reload() {
 		loadingJob.cancel()
 		loadingJob = doLoad(force = true)
+	}
+
+	/**
+	 * Saves the original image of a booru post: a booru post is a single-chapter,
+	 * single-page manga, so this loads the pages of the first chapter and saves
+	 * the first page via [PageSaveHelper].
+	 */
+	fun saveBooruImage(pageSaveHelper: PageSaveHelper) {
+		launchLoadingJob(Dispatchers.Default) {
+			val details = mangaDetails.firstOrNull { it != null && it.isLoaded } ?: return@launchLoadingJob
+			val manga = details.toManga()
+			val chapter = checkNotNull(details.allChapters.firstOrNull()) { "No pages found" }
+			val pages = mangaRepositoryFactory.create(chapter.source).getPages(chapter)
+			val page = checkNotNull(pages.firstOrNull()) { "No pages found" }
+			val task = PageSaveHelper.Task(
+				manga = manga,
+				chapterId = chapter.id,
+				pageNumber = 1,
+				page = page,
+			)
+			onImageSaved.call(pageSaveHelper.save(setOf(task)))
+		}
 	}
 
 	fun updateScrobbling(index: Int, rating: Float, status: ScrobblingStatus?) {

@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	Explicit-load video overlay for booru reader pages (see VideoPageOverlay).
+	The reader UI DOES change for videos by design: after "Load video" (and the
+	optional quality pick) the placeholder is replaced by an in-app player that
+	streams directly from the source over HTTP(S) in chunks - the full file is
+	never written to app storage (see MediaPlayer progressive streaming) and the
+	one and only way a full video lands on the device is Download video in the
+	Actions dialog.
+-->
+<FrameLayout
+	xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto"
+	xmlns:tools="http://schemas.android.com/tools"
+	android:id="@+id/booru_video_overlay_root"
+	android:layout_width="match_parent"
+	android:layout_height="match_parent"
+	android:clickable="false"
+	android:visibility="gone"
+	tools:visibility="visible">
+
+	<com.google.android.material.card.MaterialCardView
+		android:id="@+id/panelVideo"
+		android:layout_width="wrap_content"
+		android:layout_height="wrap_content"
+		android:layout_gravity="center"
+		android:visibility="visible"
+		app:cardCornerRadius="@dimen/card_indicator_size"
+		app:cardElevation="6dp">
+
+		<com.google.android.material.button.MaterialButton
+			android:id="@+id/button_load_video"
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:layout_margin="@dimen/margin_normal"
+			android:text="@string/load_video" />
+
+	</com.google.android.material.card.MaterialCardView>
+
+	<ProgressBar
+		android:id="@+id/progress_video"
+		android:layout_width="wrap_content"
+		android:layout_height="wrap_content"
+		android:layout_gravity="center"
+		android:visibility="gone" />
+
+	<FrameLayout
+		android:id="@+id/videoContainer"
+		android:layout_width="match_parent"
+		android:layout_height="match_parent"
+		android:clickable="true"
+		android:focusable="true"
+		android:visibility="gone">
+
+		<SurfaceView
+			android:id="@+id/videoSurface"
+			android:layout_width="match_parent"
+			android:layout_height="match_parent"
+			android:layout_gravity="center" />
+
+		<ProgressBar
+			android:id="@+id/progress_buffering"
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:layout_gravity="center"
+			android:visibility="gone" />
+
+		<com.google.android.material.card.MaterialCardView
+			android:id="@+id/controlsPanel"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:layout_gravity="bottom"
+			android:layout_margin="@dimen/margin_normal"
+			app:cardCornerRadius="@dimen/card_indicator_size"
+			app:cardElevation="6dp">
+
+			<LinearLayout
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:orientation="vertical"
+				android:padding="@dimen/margin_small">
+
+				<LinearLayout
+					android:layout_width="match_parent"
+					android:layout_height="wrap_content"
+					android:gravity="center_vertical"
+					android:orientation="horizontal">
+
+					<TextView
+						android:id="@+id/textPosition"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:fontFamily="monospace"
+						android:textSize="12sp"
+						tools:text="0:00" />
+
+					<SeekBar
+						android:id="@+id/seekVideo"
+						android:layout_width="0dp"
+						android:layout_height="wrap_content"
+						android:layout_weight="1" />
+
+					<TextView
+						android:id="@+id/textDuration"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:fontFamily="monospace"
+						android:textSize="12sp"
+						tools:text="0:00" />
+
+				</LinearLayout>
+
+				<HorizontalScrollView
+					android:layout_width="match_parent"
+					android:layout_height="wrap_content"
+					android:scrollbars="none">
+
+					<LinearLayout
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:layout_gravity="center_horizontal"
+						android:gravity="center_vertical"
+						android:orientation="horizontal">
+
+						<com.google.android.material.button.MaterialButton
+							android:id="@+id/buttonSkipBack"
+							android:layout_width="wrap_content"
+							android:layout_height="wrap_content"
+							android:minWidth="0dp"
+							android:minHeight="40dp"
+							android:singleLine="true"
+							android:text="@string/video_skip_backward"
+							android:textSize="12sp" />
+
+						<ImageButton
+							android:id="@+id/buttonPlayPause"
+							android:layout_width="48dp"
+							android:layout_height="48dp"
+							android:background="?attr/selectableItemBackgroundBorderless"
+							android:contentDescription="@string/play"
+							android:src="@drawable/ic_play"
+							android:tint="?attr/colorControlNormal" />
+
+						<com.google.android.material.button.MaterialButton
+							android:id="@+id/buttonSkipForward"
+							android:layout_width="wrap_content"
+							android:layout_height="wrap_content"
+							android:minWidth="0dp"
+							android:minHeight="40dp"
+							android:singleLine="true"
+							android:text="@string/video_skip_forward"
+							android:textSize="12sp" />
+
+						<com.google.android.material.button.MaterialButton
+							android:id="@+id/buttonLoop"
+							android:layout_width="wrap_content"
+							android:layout_height="wrap_content"
+							android:minWidth="0dp"
+							android:minHeight="40dp"
+							android:singleLine="true"
+							android:text="@string/video_loop"
+							android:textSize="12sp" />
+
+						<com.google.android.material.button.MaterialButton
+							android:id="@+id/buttonSpeed"
+							android:layout_width="wrap_content"
+							android:layout_height="wrap_content"
+							android:minWidth="0dp"
+							android:minHeight="40dp"
+							android:singleLine="true"
+							android:textSize="12sp"
+							tools:text="1х" />
+
+						<com.google.android.material.button.MaterialButton
+							android:id="@+id/buttonActions"
+							android:layout_width="wrap_content"
+							android:layout_height="wrap_content"
+							android:minWidth="0dp"
+							android:minHeight="40dp"
+							android:singleLine="true"
+							android:text="@string/video_actions"
+							android:textSize="12sp" />
+
+					</LinearLayout>
+
+				</HorizontalScrollView>
+
+			</LinearLayout>
+
+		</com.google.android.material.card.MaterialCardView>
+
+	</FrameLayout>
+
+</FrameLayout>

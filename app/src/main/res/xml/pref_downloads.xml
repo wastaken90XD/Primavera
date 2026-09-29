@@ -16,12 +16,14 @@
 
 	<ListPreference
 		android:entries="@array/download_formats"
+			android:entryValues="@array/values_download_formats"
 		android:key="downloads_format"
 		android:title="@string/preferred_download_format"
 		app:useSimpleSummaryProvider="true" />
 
 	<ListPreference
 		android:entries="@array/metered_network_options"
+			android:entryValues="@array/values_metered_network_options"
 		android:key="downloads_metered_network"
 		android:title="@string/download_over_cellular"
 		app:useSimpleSummaryProvider="true" />
@@ -52,6 +54,12 @@
 			android:defaultValue="true"
 			android:key="pages_dir_ask"
 			android:title="@string/ask_for_dest_dir_every_time" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="true"
+			android:key="pages_save_original"
+			android:summary="@string/pages_save_original_summary"
+			android:title="@string/pages_save_original_title" />
 
 	</PreferenceCategory>
 

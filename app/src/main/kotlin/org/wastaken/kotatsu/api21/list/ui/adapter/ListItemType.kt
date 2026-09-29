@@ -35,4 +35,5 @@ enum class ListItemType {
 	CHAPTER_LIST,
 	CHAPTER_GRID,
 	COOKIE,
+	BOORU_GRID,
 }

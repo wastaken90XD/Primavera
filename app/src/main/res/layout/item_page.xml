@@ -28,4 +28,8 @@
 
 	<include layout="@layout/layout_page_info" />
 
+	<include layout="@layout/layout_booru_gif_overlay" />
+
+	<include layout="@layout/layout_booru_video_overlay" />
+
 </FrameLayout>
