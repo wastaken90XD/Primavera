@@ -542,7 +542,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		// the fresh engine never starts surface-less (same contract as bindSurface)
 		boundSurfaceTexture?.let { engine.setRenderTarget(it, boundTargetWidth, boundTargetHeight) }
 		try {
-			engine.play(localUrl)
+			engine.play(localUrl, emptyMap())
 		} catch (e: Exception) {
 			releaseVideo()
 			setState(PlaybackState.IDLE)

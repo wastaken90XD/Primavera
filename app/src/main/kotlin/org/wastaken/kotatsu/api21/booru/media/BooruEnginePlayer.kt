@@ -1,6 +1,6 @@
 package org.wastaken.kotatsu.api21.booru.media
 
-import android.view.SurfaceTexture
+import android.graphics.SurfaceTexture
 
 /**
  * Common minimal surface of the wrapper video engines ([BooruVlcPlayer],

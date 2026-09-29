@@ -5,7 +5,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.view.Surface
-import android.view.SurfaceTexture
+import android.graphics.SurfaceTexture
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -100,7 +100,7 @@ class BooruExoPlayer(
 			.setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR or CacheDataSource.FLAG_BLOCK_ON_CACHE)
 	}
 
-	override fun play(url: String, headers: Map<String, String> = emptyMap()) {
+	override fun play(url: String, headers: Map<String, String>) {
 		// documented behavior: properties set on the factory apply to requests
 		// of sources created from now on (ExoPlayer issue #10163)
 		httpFactory.setDefaultRequestProperties(headers)

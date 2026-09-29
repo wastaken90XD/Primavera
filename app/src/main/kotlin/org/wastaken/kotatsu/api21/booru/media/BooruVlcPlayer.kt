@@ -88,7 +88,7 @@ class BooruVlcPlayer(context: Context) : BooruEnginePlayer {
 	 * The instance is reusable: vlc-android keeps ONE MediaPlayer per service,
 	 * only the Media changes per item (libvlc_new per item is native-heap churn).
 	 */
-	override fun play(url: String, headers: Map<String, String> = emptyMap()) {
+	override fun play(url: String, headers: Map<String, String>) {
 		// stop() first: deterministic demuxer teardown before reusing the instance
 		runCatching { player.stop() }
 		val media = Media(libVlc, Uri.parse(url))
