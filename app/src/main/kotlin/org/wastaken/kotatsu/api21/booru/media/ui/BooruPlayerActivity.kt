@@ -16,6 +16,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.provider.MediaStore
 import android.view.GestureDetector
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.Surface
@@ -206,6 +207,30 @@ class BooruPlayerActivity :
 		surfaceTex = null
 		handler.removeCallbacksAndMessages(null)
 		super.onDestroy()
+	}
+
+	/**
+	 * Hardware volume keys inside the player must ALWAYS mean volume.
+	 * BaseActivity has a debug-only VOLUME_UP -> ActivityCompat.recreate()
+	 * shortcut (dev convenience); inside a player that is fatal mid-playback:
+	 * recreate() tears the TextureView surface down (screen goes blank) and
+	 * the engine loses its render target while the service is unbound /
+	 * re-bound - for the user the player blacks out, then dies. Never invoke
+	 * the super chain for volume keys here; returning false lets the
+	 * platform's unhandled-key fallback adjust STREAM_MUSIC as usual.
+	 */
+	override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+		if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+			return false
+		}
+		return super.onKeyDown(keyCode, event)
+	}
+
+	override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+		if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+			return false
+		}
+		return super.onKeyUp(keyCode, event)
 	}
 
 	// region surfaces
