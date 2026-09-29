@@ -100,7 +100,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	private val binder = LocalBinder()
 	private val listeners = ArrayList<Listener>()
 	private var mediaPlayer: MediaPlayer? = null
-	private var vlcPlayer: BooruVlcPlayer? = null
+	private var enginePlayer: BooruEnginePlayer? = null
 	private var proxy: VideoStreamProxy? = null
 
 	/** Identity of the item the warm proxy streams, plus its loopback URL. */
@@ -135,7 +135,11 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 
 	/** The engine actually powering the current playback (settings value taken at open time). */
 	val activeVideoEngine: BooruVideoEngine
-		get() = if (vlcPlayer != null) BooruVideoEngine.LIBVLC else BooruVideoEngine.SYSTEM
+		get() = when (enginePlayer) {
+			is BooruExoPlayer -> BooruVideoEngine.EXOPLAYER
+			is BooruVlcPlayer -> BooruVideoEngine.LIBVLC
+			else -> BooruVideoEngine.SYSTEM
+		}
 
 	var videoWidth = 0
 		private set
@@ -292,17 +296,17 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	}
 
 	fun togglePlayPause() {
-		val vlc = vlcPlayer
-		if (vlc != null) {
-			if (vlc.isPlaying) {
-				vlc.pause()
+		val engine = enginePlayer
+		if (engine != null) {
+			if (engine.isPlaying) {
+				engine.pause()
 				setState(PlaybackState.PAUSED)
 				abandonAudioFocus()
 				scheduleHibernateIfIdle()
 			} else {
 				requestAudioFocus()
 				cancelHibernate() // a resume invalidates the pause-armed countdown
-				vlc.resume()
+				engine.resume()
 				setState(PlaybackState.PLAYING)
 			}
 			return
@@ -331,9 +335,9 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	}
 
 	fun seekTo(positionMs: Int) {
-		val vlc = vlcPlayer
-		if (vlc != null) {
-			runCatching { vlc.seekTo(positionMs.toLong().coerceAtLeast(0L)) }
+		val engine = enginePlayer
+		if (engine != null) {
+			runCatching { engine.seekTo(positionMs.toLong().coerceAtLeast(0L)) }
 			return
 		}
 		mediaPlayer?.let { player ->
@@ -346,23 +350,23 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	}
 
 	fun isVideoPlaying(): Boolean = runCatching {
-		vlcPlayer?.isPlaying ?: (mediaPlayer?.isPlaying == true)
+		enginePlayer?.isPlaying ?: (mediaPlayer?.isPlaying == true)
 	}.getOrDefault(false)
 
 	fun videoDuration(): Int = runCatching {
-		vlcPlayer?.length?.toInt() ?: mediaPlayer?.duration ?: 0
+		enginePlayer?.length?.toInt() ?: mediaPlayer?.duration ?: 0
 	}.getOrDefault(0)
 
 	fun videoPosition(): Int = runCatching {
-		vlcPlayer?.time?.toInt() ?: mediaPlayer?.currentPosition ?: 0
+		enginePlayer?.time?.toInt() ?: mediaPlayer?.currentPosition ?: 0
 	}.getOrDefault(0)
 
 	fun setSpeed(newSpeed: Float) {
 		speed = newSpeed
-		val vlc = vlcPlayer
-		if (vlc != null) {
+		val engine = enginePlayer
+		if (engine != null) {
 			// libVLC rate control works on every API level (no API-23 gate)
-			runCatching { vlc.setSpeed(newSpeed) }
+			runCatching { engine.setSpeed(newSpeed) }
 			return
 		}
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -406,7 +410,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		boundSurfaceTexture = surfaceTexture
 		boundTargetWidth = width
 		boundTargetHeight = height
-		vlcPlayer?.setRenderTarget(surfaceTexture, width, height)
+		enginePlayer?.setRenderTarget(surfaceTexture, width, height)
 		if (surfaceTexture != null) cancelHibernate() else scheduleHibernateIfIdle()
 	}
 
@@ -452,17 +456,33 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		maxParts = settings.booruStreamPartCount,
 	)
 
-	private fun openVideo(item: BooruMediaItem) {
-		val engine = settings.booruVideoEngine
-		// libVLC: stop-only so the instance survives across queue items;
-		// system engine / explicit teardowns always get the full release
-		releaseVideo(releaseVlc = engine != BooruVideoEngine.LIBVLC)
+	private fun openVideo(item: BooruMediaItem, forcedEngine: BooruVideoEngine? = null) {
+		val engine = forcedEngine ?: settings.booruVideoEngine
+		// wrapper engines (libVLC / ExoPlayer) survive across queue items via
+		// stop-only UNLESS the requested engine is a different wrapper type;
+		// the system engine and mismatched wrappers always get full release
+		val wrapperMatches = when (engine) {
+			BooruVideoEngine.EXOPLAYER -> enginePlayer is BooruExoPlayer
+			BooruVideoEngine.LIBVLC -> enginePlayer is BooruVlcPlayer
+			BooruVideoEngine.SYSTEM -> true
+		}
+		releaseVideo(releaseEngine = engine == BooruVideoEngine.SYSTEM || !wrapperMatches)
 		setState(PlaybackState.PREPARING)
 		// consume a hibernation resume point before it can leak across items
 		pendingResumeMs = if (hibernatedItemId == item.id) hibernatedResumeMs else 0
 		hibernatedItemId = null
 		hibernatedResumeMs = 0
 		val headers = BooruStreamHeaders.forStream(mangaRepositoryFactory, mangaLoaderContext, item.source, item.url)
+		// loop/repeat intent is engine-neutral and must be set BEFORE any
+		// engine-branch early return (ExoPlayer path returns below this)
+		videoLooping = settings.isMediaVideoLoop || queue.repeatMode == RepeatMode.ONE
+		// ExoPlayer path: reads the remote URL directly via OkHttpDataSource
+		// (app client: cookies/headers) into SimpleCache disk spans - the
+		// loopback proxy + .part spool layer does not exist on this path at all
+		if (engine == BooruVideoEngine.EXOPLAYER) {
+			openVideoExo(item, headers)
+			return
+		}
 		// warm-proxy reuse: replaying the SAME item (toggle replay, prev->next
 		// back-and-forth, engine re-materialization after a stop) skips proxy
 		// and CDN startup entirely; the spooled parts are still on disk
@@ -485,10 +505,10 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 			proxyLocalUrl = started
 			started
 		}
-		videoLooping = settings.isMediaVideoLoop || queue.repeatMode == RepeatMode.ONE
-		when (engine) {
-			BooruVideoEngine.LIBVLC -> openVideoVlc(item, localUrl)
-			BooruVideoEngine.SYSTEM -> openVideoSystem(item, localUrl)
+		if (engine == BooruVideoEngine.LIBVLC) {
+			openVideoVlc(item, localUrl)
+		} else {
+			openVideoSystem(item, localUrl)
 		}
 	}
 
@@ -501,8 +521,8 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	private fun openVideoVlc(item: BooruMediaItem, localUrl: String) {
 		// vlc-android VLCInstance pattern: ONE engine per service lifetime,
 		// reused across items; created lazily on the first play touch only
-		val existing = vlcPlayer
-		val vlc = if (existing != null) {
+		val existing = enginePlayer as? BooruVlcPlayer
+		val engine = if (existing != null) {
 			existing
 		} else {
 			try {
@@ -515,63 +535,108 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 			}
 		}
 		if (existing == null) {
-			vlcPlayer = vlc
-			vlc.callback = object : BooruVlcPlayer.Callback {
-				// every handler reads service state at fire time, never a
-				// captured item: one callback now outlives many play() calls
-
-				override fun onPlaying(videoWidth: Int, videoHeight: Int) {
-					if (vlcPlayer !== vlc) return
-					if (videoWidth > 0 && videoHeight > 0) {
-						this@BooruMediaService.videoWidth = videoWidth
-						this@BooruMediaService.videoHeight = videoHeight
-						onVideoSizeChanged?.invoke(videoWidth, videoHeight)
-					}
-					runCatching { vlc.setSpeed(speed) }
-					val resumeMs = pendingResumeMs
-					pendingResumeMs = 0
-					if (resumeMs > 0) runCatching { vlc.seekTo(resumeMs.toLong()) }
-					requestAudioFocus()
-					setState(PlaybackState.PLAYING)
-				}
-
-				override fun onBuffering(percent: Float) {
-					if (vlcPlayer !== vlc) return
-					onBufferingChange?.invoke(percent < 100f)
-				}
-
-				override fun onEncounteredError() {
-					if (vlcPlayer !== vlc) return
-					val failedItem = currentItem
-					releaseVideo()
-					setState(PlaybackState.IDLE)
-					notifyError(failedItem, 0, 0)
-				}
-
-				override fun onEndReached() {
-					if (vlcPlayer !== vlc) return
-					if (videoLooping) {
-						runCatching {
-							vlc.seekTo(0)
-							vlc.resume()
-						}
-					} else {
-						val next = queue.nextIndex()
-						if (next >= 0) playIndex(next) else setState(PlaybackState.IDLE)
-					}
-				}
-
-				override fun onTimeChanged(positionMs: Long) {
-					if (vlcPlayer !== vlc) return
-					onPlaybackProgress?.invoke(positionMs.toInt(), vlc.length.toInt())
-				}
-			}
+			enginePlayer = engine
+			wireEngineCallback(engine)
 		}
 		// a texture that raced in during proxy start is remembered; replay it so
 		// the fresh engine never starts surface-less (same contract as bindSurface)
-		boundSurfaceTexture?.let { vlc.setRenderTarget(it, boundTargetWidth, boundTargetHeight) }
+		boundSurfaceTexture?.let { engine.setRenderTarget(it, boundTargetWidth, boundTargetHeight) }
 		try {
-			vlc.play(localUrl)
+			engine.play(localUrl)
+		} catch (e: Exception) {
+			releaseVideo()
+			setState(PlaybackState.IDLE)
+			notifyError(item, 0, 0)
+		}
+	}
+
+	/**
+	 * Engine-neutral callback wiring shared by both wrapper engines
+	 * (BooruVlcPlayer / BooruExoPlayer). Identity checks kill stale events
+	 * from an already-released engine; handlers read service state at fire
+	 * time, never a captured item - one callback outlives many play() calls.
+	 */
+	private fun wireEngineCallback(engine: BooruEnginePlayer) {
+		engine.callback = object : BooruEnginePlayer.Callback {
+		// every handler reads service state at fire time, never a
+		// captured item: one callback now outlives many play() calls
+
+		override fun onPlaying(videoWidth: Int, videoHeight: Int) {
+			if (enginePlayer !== engine) return
+			if (videoWidth > 0 && videoHeight > 0) {
+				this@BooruMediaService.videoWidth = videoWidth
+				this@BooruMediaService.videoHeight = videoHeight
+				onVideoSizeChanged?.invoke(videoWidth, videoHeight)
+			}
+			runCatching { engine.setSpeed(speed) }
+			val resumeMs = pendingResumeMs
+			pendingResumeMs = 0
+			if (resumeMs > 0) runCatching { engine.seekTo(resumeMs.toLong()) }
+			requestAudioFocus()
+			setState(PlaybackState.PLAYING)
+		}
+
+		override fun onBuffering(percent: Float) {
+			if (enginePlayer !== engine) return
+			onBufferingChange?.invoke(percent < 100f)
+		}
+
+		override fun onEncounteredError() {
+			if (enginePlayer !== engine) return
+			val failedItem = currentItem
+			releaseVideo()
+			setState(PlaybackState.IDLE)
+			notifyError(failedItem, 0, 0)
+		}
+
+		override fun onEndReached() {
+			if (enginePlayer !== engine) return
+			if (videoLooping) {
+				runCatching {
+					engine.seekTo(0)
+					engine.resume()
+				}
+			} else {
+				val next = queue.nextIndex()
+				if (next >= 0) playIndex(next) else setState(PlaybackState.IDLE)
+			}
+		}
+
+		override fun onTimeChanged(positionMs: Long) {
+			if (enginePlayer !== engine) return
+			onPlaybackProgress?.invoke(positionMs.toInt(), engine.length.toInt())
+		}
+		}
+	}
+
+	/**
+	 * ExoPlayer engine (BooruExoPlayer): same service-lifetime single-engine
+	 * pattern as libVLC - the instance is re-sourced per item, and a
+	 * construction failure falls back to the legacy system engine behind the
+	 * proxy so the session stays playable.
+	 */
+	private fun openVideoExo(item: BooruMediaItem, headers: Map<String, String>) {
+		val existing = enginePlayer as? BooruExoPlayer
+		val exo = if (existing != null) {
+			existing
+		} else {
+			try {
+				BooruExoPlayer(this, okHttpClient, settings)
+			} catch (e: Exception) {
+				releaseVideo(releaseEngine = true)
+				openVideo(item, BooruVideoEngine.SYSTEM)
+				return
+			}
+		}
+		if (existing == null) {
+			enginePlayer = exo
+			wireEngineCallback(exo)
+		}
+		// a texture that raced in during engine setup is remembered; replay it
+		// (same contract as bindSurface / the libVLC path)
+		boundSurfaceTexture?.let { exo.setRenderTarget(it, boundTargetWidth, boundTargetHeight) }
+		try {
+			exo.play(item.url, headers)
 		} catch (e: Exception) {
 			releaseVideo()
 			setState(PlaybackState.IDLE)
@@ -684,7 +749,7 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		if (isVideoPlaying() || playbackState == PlaybackState.PLAYING ||
 			playbackState == PlaybackState.PREPARING) return
 		if (boundSurface != null || boundSurfaceTexture != null) return
-		if (vlcPlayer == null && mediaPlayer == null) return
+		if (enginePlayer == null && mediaPlayer == null) return
 		val task = Runnable { hibernateEngine() }
 		hibernateTask = task
 		handler.postDelayed(task, mode.delayMs)
@@ -704,13 +769,13 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 		if (isVideoPlaying() || playbackState == PlaybackState.PLAYING ||
 			playbackState == PlaybackState.PREPARING) return
 		if (!allowSurfaceBound && (boundSurface != null || boundSurfaceTexture != null)) return
-		if (vlcPlayer == null && mediaPlayer == null) return
+		if (enginePlayer == null && mediaPlayer == null) return
 		val item = currentItem
 		if (item != null && item.mediaType == BooruMediaType.VIDEO) {
 			hibernatedItemId = item.id
 			hibernatedResumeMs = videoPosition()
 		}
-		releaseVideo(releaseVlc = true)
+		releaseVideo(releaseEngine = true)
 		setState(PlaybackState.IDLE)
 	}
 
@@ -738,18 +803,18 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	}
 
 	/**
-	 * releaseVlc=false only stops the libVLC instance (it is reused across
-	 * queue items, vlc-android single-MediaPlayer style); true tears it down
-	 * fully - used by hibernation, errors, engine switches and service death.
+	 * releaseEngine=false only stops the wrapper instance (both libVLC and
+	 * ExoPlayer are reused across queue items); true tears it down fully -
+	 * used by hibernation, errors, engine switches and service death.
 	 */
-	private fun releaseVideo(releaseVlc: Boolean = true) {
+	private fun releaseVideo(releaseEngine: Boolean = true) {
 		cancelPrepareWatchdog()
 		cancelHibernate()
-		if (releaseVlc) {
-			runCatching { vlcPlayer?.release() }
-			vlcPlayer = null
+		if (releaseEngine) {
+			runCatching { enginePlayer?.release() }
+			enginePlayer = null
 		} else {
-			runCatching { vlcPlayer?.stopPlayback() }
+			runCatching { enginePlayer?.stopPlayback() }
 		}
 		runCatching {
 			mediaPlayer?.setOnPreparedListener(null)

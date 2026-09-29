@@ -486,10 +486,10 @@ class BooruPlayerActivity :
 		viewBinding.buttonLoop.alpha = if (on) 1f else 0.5f
 	}
 
-	/** System MediaPlayer needs API 23+ for rate control; libVLC supports it everywhere. */
+	/** System MediaPlayer needs API 23+ for rate control; both libVLC and ExoPlayer support it everywhere. */
 	private val isSpeedControlAvailable: Boolean
 		get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ||
-			settings.booruVideoEngine == BooruVideoEngine.LIBVLC
+			settings.booruVideoEngine != BooruVideoEngine.SYSTEM
 
 	private fun showSpeedDialog() {
 		if (!isSpeedControlAvailable) return
@@ -625,9 +625,9 @@ class BooruPlayerActivity :
 	private fun refreshPositionUi() {
 		if (isSeeking) return
 		val service = service ?: return
-		// libVLC TimeChanged events already feed the seekbar; the poll is the
-		// system engine's update path
-		if (service.activeVideoEngine == BooruVideoEngine.LIBVLC) return
+		// libVLC/ExoPlayer TimeChanged events already feed the seekbar; the
+		// poll is the system engine's update path
+		if (service.activeVideoEngine != BooruVideoEngine.SYSTEM) return
 		val duration = service.videoDuration()
 		val position = service.videoPosition()
 		if (duration > 0) {

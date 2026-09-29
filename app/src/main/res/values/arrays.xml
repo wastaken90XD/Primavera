@@ -288,7 +288,8 @@
 		<item>Select</item>
 	</string-array>
 	<string-array name="booru_video_engine_entries">
-		<item>libVLC (recommended)</item>
+		<item>ExoPlayer (recommended)</item>
+		<item>libVLC</item>
 		<item>System (legacy)</item>
 	</string-array>
 	<string-array name="booru_hibernate_mode_entries">

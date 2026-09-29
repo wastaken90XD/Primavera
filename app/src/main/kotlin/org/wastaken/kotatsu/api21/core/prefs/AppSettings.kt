@@ -182,7 +182,7 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 
 	/** Video decoder used by the booru media player: embedded libVLC or the platform MediaPlayer. */
 	var booruVideoEngine: BooruVideoEngine
-		get() = prefs.getEnumValue(KEY_BOORU_VIDEO_ENGINE, BooruVideoEngine.LIBVLC)
+		get() = prefs.getEnumValue(KEY_BOORU_VIDEO_ENGINE, BooruVideoEngine.EXOPLAYER)
 		set(value) = prefs.edit { putEnumValue(KEY_BOORU_VIDEO_ENGINE, value) }
 
 	/**

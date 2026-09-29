@@ -24,30 +24,18 @@ import org.videolan.libvlc.MediaPlayer
  * window <-> full screen) is a detach/attach cycle that never restarts playback.
  *
  * Network policy mirrors what the service already guarantees for the system
- * engine: the URL handed here is the memory-only VideoStreamProxy loopback, so
- * source headers/cookies ride the OkHttp upstream exactly like before; the
- * [play] headers parameter exists for future direct-URL playback.
+ * engine: the URL handed here is the VideoStreamProxy loopback carrying the
+ * .part spool, so source headers/cookies ride the OkHttp upstream exactly
+ * like before. Direct-URL streaming without the loopback is the ExoPlayer
+ * engine's domain (see BooruExoPlayer - SimpleCache spans replace .parts).
  */
-class BooruVlcPlayer(context: Context) {
-
-	/**
-	 * Engine callbacks mapped from MediaPlayer.Event. libVLC errors are
-	 * deterministic: EncounteredError always terminates a broken stream, so no
-	 * prepare watchdog is needed (that guard is a system-MediaPlayer quirk).
-	 */
-	interface Callback {
-		fun onPlaying(videoWidth: Int, videoHeight: Int)
-		fun onBuffering(percent: Float)
-		fun onEncounteredError()
-		fun onEndReached()
-		fun onTimeChanged(positionMs: Long)
-	}
+class BooruVlcPlayer(context: Context) : BooruEnginePlayer {
 
 	private val libVlc = LibVLC(context.applicationContext, VLC_OPTIONS)
 	private val player = MediaPlayer(libVlc)
 	private var viewsAttached = false
 
-	var callback: Callback? = null
+	override var callback: BooruEnginePlayer.Callback? = null
 
 	init {
 		player.setEventListener { event ->
@@ -71,7 +59,7 @@ class BooruVlcPlayer(context: Context) {
 	 * while playing continues the stream without restart - this is the
 	 * floating <-> full-screen handoff.
 	 */
-	fun setRenderTarget(surfaceTexture: SurfaceTexture?, width: Int, height: Int) {
+	override fun setRenderTarget(surfaceTexture: SurfaceTexture?, width: Int, height: Int) {
 		if (viewsAttached) {
 			runCatching { player.detachViews() }
 			viewsAttached = false
@@ -89,7 +77,7 @@ class BooruVlcPlayer(context: Context) {
 		}
 	}
 
-	fun stopPlayback() {
+	override fun stopPlayback() {
 		runCatching { player.stop() }
 	}
 
@@ -100,7 +88,7 @@ class BooruVlcPlayer(context: Context) {
 	 * The instance is reusable: vlc-android keeps ONE MediaPlayer per service,
 	 * only the Media changes per item (libvlc_new per item is native-heap churn).
 	 */
-	fun play(url: String, headers: Map<String, String> = emptyMap()) {
+	override fun play(url: String, headers: Map<String, String> = emptyMap()) {
 		// stop() first: deterministic demuxer teardown before reusing the instance
 		runCatching { player.stop() }
 		val media = Media(libVlc, Uri.parse(url))
@@ -116,36 +104,36 @@ class BooruVlcPlayer(context: Context) {
 		player.play()
 	}
 
-	fun pause() {
+	override fun pause() {
 		player.pause()
 	}
 
 	/** play() from a paused instance resumes - same call toggles both ways. */
-	fun resume() {
+	override fun resume() {
 		player.play()
 	}
 
-	fun seekTo(positionMs: Long) {
+	override fun seekTo(positionMs: Long) {
 		// setTime() returns long (not a beans setter) - no Kotlin property write
 		player.setTime(positionMs)
 	}
 
 	/** Playback rate works on every API level (no MediaPlayer API-23 gate). */
-	fun setSpeed(rate: Float) {
+	override fun setSpeed(rate: Float) {
 		// setRate() returns int status - call it as a method, not a property
 		player.setRate(rate)
 	}
 
-	val time: Long
+	override val time: Long
 		get() = player.time
 
-	val length: Long
+	override val length: Long
 		get() = player.length
 
-	val isPlaying: Boolean
+	override val isPlaying: Boolean
 		get() = player.isPlaying
 
-	fun release() {
+	override fun release() {
 		callback = null
 		player.setEventListener(null)
 		setRenderTarget(null, 0, 0)

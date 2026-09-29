@@ -154,6 +154,9 @@ dependencies {
 
 	// libVLC video engine for booru playback (BooruVlcPlayer / BooruMediaService)
 	implementation("org.videolan.android:libvlc-all:3.4.4")
+	// ExoPlayer video engine (BooruExoPlayer): default booru engine, SimpleCache-backed streaming
+	implementation libs.androidx.media3.exoplayer
+	implementation libs.androidx.media3.datasource.okhttp
 
 	coreLibraryDesugaring libs.desugar.jdk.libs
 	implementation libs.kotlin.stdlib

@@ -24,7 +24,7 @@ enum class RepeatMode { NONE, ONE, ALL }
 
 enum class BooruLongPressAction { DOWNLOAD, MENU, SELECT }
 
-enum class BooruVideoEngine { LIBVLC, SYSTEM }
+enum class BooruVideoEngine { EXOPLAYER, LIBVLC, SYSTEM }
 
 /**
  * Opt-in release of the video engine while merely PAUSED and hidden. NEVER
