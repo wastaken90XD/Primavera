@@ -111,8 +111,11 @@ object ProxyListFetcher {
 					error = "HTTP ${response.code}"
 					return@use
 				}
-				val body = response.body
-				val source = body.byteStream().buffered()
+				val source = response.body?.byteStream()?.buffered()
+				if (source == null) {
+					error = "empty body"
+					return@use
+				}
 				while (true) {
 					val lineBuffer = StringBuilder()
 					// streaming line-read with byte accounting: read chars from the
