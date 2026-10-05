@@ -297,6 +297,7 @@ object ProxyPoolController {
 	}
 
 	private fun getMark(host: String): HostMark? {
+		val m = marks[host] ?: return null
 		return if (m.untilMs > System.currentTimeMillis()) m else {
 			marks.remove(host, m)
 			null
