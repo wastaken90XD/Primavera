@@ -17,8 +17,9 @@ import org.wastaken.kotatsu.api21.core.network.cookies.PreferencesCookieJar
 import org.wastaken.kotatsu.api21.core.network.imageproxy.ImageProxyInterceptor
 import org.wastaken.kotatsu.api21.core.network.imageproxy.RealImageProxyInterceptor
 import org.wastaken.kotatsu.api21.core.network.proxy.ProxyProvider
-import org.wastaken.kotatsu.api21.core.network.proxypool.PoolMode
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolRouteInterceptor
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyPoolController
+import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyPoolRetryInterceptor
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyPoolSelector
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.core.util.ext.assertNotInMainThread
@@ -87,6 +88,12 @@ interface NetworkModule {
 				installExtraCertificates(contextProvider.get())
 			}
 			cache(cache)
+			// Proxy pool (experimental) component 4/5: retry wrapper sits
+			// OUTERMOST (registered first) so each retry re-runs the full
+			// chain; the route interceptor runs after Connect where the leg's
+			// actual proxy is known. Both are no-ops unless the pool is active.
+			addInterceptor(ProxyPoolRetryInterceptor(settings))
+			addNetworkInterceptor(PoolRouteInterceptor(settings))
 			addInterceptor(GZipInterceptor())
 			addInterceptor(CloudFlareInterceptor())
 			addInterceptor(RateLimitInterceptor())

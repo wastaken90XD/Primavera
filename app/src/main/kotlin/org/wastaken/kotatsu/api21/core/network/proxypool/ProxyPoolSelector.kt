@@ -51,6 +51,9 @@ class ProxyPoolSelector(
 		if (uri.scheme?.lowercase() != "https") {
 			return DIRECT_LIST // spec 3.7: never proxy non-HTTPS through the pool
 		}
+		if (ProxyPoolController.isHardExcluded(host, settings)) {
+			return DIRECT_LIST // wsrv.nl image proxy / worker relay: never via pool
+		}
 		if (ProxyPoolController.isForbiddenManually(host, settings.poolForbiddenHosts)) {
 			return DIRECT_LIST
 		}

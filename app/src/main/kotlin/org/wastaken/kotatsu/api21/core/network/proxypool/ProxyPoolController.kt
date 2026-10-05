@@ -19,6 +19,7 @@ import org.wastaken.kotatsu.api21.core.util.ext.printStackTraceDebug
 import java.lang.ref.WeakReference
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.SocketAddress
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.util.ArrayDeque
@@ -423,6 +424,33 @@ object ProxyPoolController {
 	}
 
 	private val DIRECT_LIST = listOf(Proxy.NO_PROXY)
+
+	/** True when [sa] is the address of one of the pool's current healthy proxies. */
+	fun isPoolProxyAddress(sa: SocketAddress?): Boolean {
+		val key = keyOfProxyAddress(sa) ?: return false
+		return status.healthy.any { proxyKeyOf(it.entry) == key }
+	}
+
+	/** True while this host carries a learned pool-first mark (spec 5.3). */
+	fun isMarkedHost(host: String): Boolean = getMark(host) != null
+
+	/**
+	 * Never routed through the pool, no matter the mode: the wsrv.nl image
+	 * proxy and the user's Cloudflare-worker relay (spec: the pool must never
+	 * touch the wsrv.nl image-proxy path).
+	 */
+	fun isHardExcluded(host: String, settings: AppSettings): Boolean {
+		if (host == "wsrv.nl" || host.endsWith(".wsrv.nl")) {
+			return true
+		}
+		if (settings.wsrvWorkerEnabled) {
+			val workerHost = runCatching { settings.wsrvWorkerUrl.toHttpUrlOrNull()?.host }.getOrNull()
+			if (workerHost != null && workerHost.equals(host, ignoreCase = true)) {
+				return true
+			}
+		}
+		return false
+	}
 
 	/**
 	 * Cloudflare-managed cookies: never sent through pool proxies (the proxy
