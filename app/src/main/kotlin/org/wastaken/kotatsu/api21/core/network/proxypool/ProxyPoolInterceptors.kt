@@ -105,7 +105,7 @@ class PoolRouteInterceptor(
 		}
 		val connection = chain.connection() ?: return chain.proceed(request)
 		val route = connection.route()
-		val socketAddress = route.socketAddress()
+		val socketAddress = route.socketAddress
 		val onPool = ProxyPoolController.isPoolProxyAddress(socketAddress)
 		val host = request.url.host.lowercase()
 		val adjusted = if (onPool) request.stripCloudflareCookieHeader() else request
