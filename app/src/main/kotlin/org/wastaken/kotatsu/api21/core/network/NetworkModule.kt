@@ -17,6 +17,7 @@ import org.wastaken.kotatsu.api21.core.network.cookies.PreferencesCookieJar
 import org.wastaken.kotatsu.api21.core.network.imageproxy.ImageProxyInterceptor
 import org.wastaken.kotatsu.api21.core.network.imageproxy.RealImageProxyInterceptor
 import org.wastaken.kotatsu.api21.core.network.proxy.ProxyProvider
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolMode
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyPoolController
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyPoolSelector
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings

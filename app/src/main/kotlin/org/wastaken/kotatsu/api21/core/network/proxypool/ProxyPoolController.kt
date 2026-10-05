@@ -168,7 +168,7 @@ object ProxyPoolController {
 	/** Routes for one host, already ordered per mode and learning. Caller handles OFF/inert. */
 	fun routesFor(host: String, mode: PoolMode): List<Proxy> {
 		val healthy = healthyProxies()
-		val marked = markFor(host) != null
+		val marked = getMark(host) != null
 		return when (mode) {
 			PoolMode.OFF -> DIRECT_LIST
 			PoolMode.FALLBACK -> if (marked || healthy.isEmpty()) {
@@ -265,7 +265,7 @@ object ProxyPoolController {
 			}
 			dq.addLast(now)
 			val n = dq.size
-			if (n >= MARK_RESET_THRESHOLD && markFor(host) == null) {
+			if (n >= MARK_RESET_THRESHOLD && getMark(host) == null) {
 				marks[host] = HostMark(now + MARK_TTL_MS, "resets=$n", n)
 				Log.i(TAG, "host=$host marked pool-first for 10min (resets=$n in 10min)")
 			}
@@ -296,8 +296,7 @@ object ProxyPoolController {
 		proxyFailStreak.remove(proxyKey)
 	}
 
-	fun markFor(host: String): HostMark? {
-		val m = marks[host] ?: return null
+	private fun getMark(host: String): HostMark? {
 		return if (m.untilMs > System.currentTimeMillis()) m else {
 			marks.remove(host, m)
 			null
@@ -320,9 +319,6 @@ object ProxyPoolController {
 	}
 
 	fun refreshAsync(force: Boolean) {
-		if (!force && !refreshMutex.tryLock()) {
-			return
-		}
 		val s = settingsRef ?: return
 		val client = baseClientRef?.get() ?: return
 		val ctx = contextRef?.get() ?: return
@@ -332,6 +328,8 @@ object ProxyPoolController {
 		scope.launch {
 			if (force) {
 				refreshMutex.lock()
+			} else if (!refreshMutex.tryLock()) {
+				return@launch
 			}
 			try {
 				status = status.copy(refreshing = true)
