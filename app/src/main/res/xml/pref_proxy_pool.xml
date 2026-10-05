@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen
+	xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto"
+	android:title="@string/proxy_pool">
+
+	<Preference
+		android:key="pool_disclosure"
+		android:persistent="false"
+		android:selectable="false"
+		android:title="@string/pool_disclosure" />
+
+	<ListPreference
+		android:defaultValue="OFF"
+		android:entries="@array/proxy_pool_modes"
+		android:entryValues="@array/values_proxy_pool_modes"
+		android:key="pool_mode"
+		android:title="@string/proxy_pool"
+		app:allowDividerAbove="true"
+		app:useSimpleSummaryProvider="true" />
+
+	<Preference
+		android:key="pool_status"
+		android:persistent="false"
+		android:title="@string/pool_status_title" />
+
+	<EditTextPreference
+		android:key="pool_lists"
+		android:summary="@string/pool_lists_summary"
+		android:title="@string/pool_lists_title" />
+
+	<EditTextPreference
+		android:key="pool_test_url"
+		android:summary="@string/pool_test_url_summary"
+		android:title="@string/pool_test_url_title"
+		app:useSimpleSummaryProvider="true" />
+
+	<EditTextPreference
+		android:key="pool_max_healthy"
+		android:title="@string/pool_max_healthy_title"
+		app:useSimpleSummaryProvider="true" />
+
+	<EditTextPreference
+		android:key="pool_forbidden_hosts"
+		android:summary="@string/pool_forbidden_hosts_summary"
+		android:title="@string/pool_forbidden_hosts_title" />
+
+</PreferenceScreen>

@@ -28,6 +28,12 @@
 		android:title="@string/proxy"
 		app:allowDividerAbove="true" />
 
+	<PreferenceScreen
+		android:fragment="org.wastaken.kotatsu.api21.settings.ProxyPoolSettingsFragment"
+		android:key="proxy_pool_screen"
+		android:summary="@string/proxy_pool_summary"
+		android:title="@string/proxy_pool" />
+
 	<ListPreference
 		android:entries="@array/doh_providers"
 		android:key="doh"

@@ -348,4 +348,16 @@
 		<item>@string/media_repeat_all</item>
 	</string-array>
 
+	<string-array name="proxy_pool_modes" translatable="false">
+		<item>Off</item>
+		<item>@string/pool_mode_fallback</item>
+		<item>@string/pool_mode_always</item>
+	</string-array>
+
+	<string-array name="values_proxy_pool_modes" translatable="false">
+		<item>OFF</item>
+		<item>FALLBACK</item>
+		<item>ALWAYS</item>
+	</string-array>
+
 </resources>
