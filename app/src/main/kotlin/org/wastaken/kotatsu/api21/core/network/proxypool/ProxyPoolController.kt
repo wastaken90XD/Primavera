@@ -421,15 +421,13 @@ object ProxyPoolController {
 		}
 	}
 
-	companion object {
-		private val DIRECT_LIST = listOf(Proxy.NO_PROXY)
+	private val DIRECT_LIST = listOf(Proxy.NO_PROXY)
 
-		/**
-		 * Cloudflare-managed cookies: never sent through pool proxies (the proxy
-		 * would impersonate the cleared IP), but the HOST stays pool-eligible
-		 * (user amendment superseding the original "direct only" rule).
-		 */
-		fun isCloudflareCookie(nameLower: String): Boolean =
-			nameLower.startsWith("cf_") || nameLower.startsWith("__cf")
-	}
+	/**
+	 * Cloudflare-managed cookies: never sent through pool proxies (the proxy
+	 * would impersonate the cleared IP), but the HOST stays pool-eligible
+	 * (user amendment superseding the original "direct only" rule).
+	 */
+	fun isCloudflareCookie(nameLower: String): Boolean =
+		nameLower.startsWith("cf_") || nameLower.startsWith("__cf")
 }
