@@ -29,7 +29,7 @@ import okhttp3.Response
 import org.wastaken.kotatsu.api21.R
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.wastaken.kotatsu.api21.booru.media.ui.BooruPlayerActivity
-import org.wastaken.kotatsu.api21.core.network.MangaHttpClient
+import org.wastaken.kotatsu.api21.core.network.VideoHttpClient
 import org.wastaken.kotatsu.api21.core.parser.MangaRepository
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.core.util.ext.checkNotificationPermission
@@ -79,7 +79,10 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	@Inject
 	lateinit var queueStore: BooruMediaQueueStore
 
-	@MangaHttpClient
+	// VideoHttpClient: manga-shaped tier but re-pinned to the static
+	// ProxyProvider selector - the experimental proxy pool never serves
+	// video traffic (pool spec 5.7 / amendment 2).
+	@VideoHttpClient
 	@Inject
 	lateinit var okHttpClient: OkHttpClient
 

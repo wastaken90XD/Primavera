@@ -17,6 +17,8 @@ import org.wastaken.kotatsu.api21.core.network.cookies.PreferencesCookieJar
 import org.wastaken.kotatsu.api21.core.network.imageproxy.ImageProxyInterceptor
 import org.wastaken.kotatsu.api21.core.network.imageproxy.RealImageProxyInterceptor
 import org.wastaken.kotatsu.api21.core.network.proxy.ProxyProvider
+import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyPoolController
+import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyPoolSelector
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.core.util.ext.assertNotInMainThread
 import org.wastaken.kotatsu.api21.core.util.ext.printStackTraceDebug
@@ -70,7 +72,12 @@ interface NetworkModule {
 			readTimeout(60, TimeUnit.SECONDS)
 			writeTimeout(20, TimeUnit.SECONDS)
 			cookieJar(cookieJar)
-			proxySelector(proxyProvider.selector)
+			// Proxy pool (experimental) component 3/5: single OkHttp hook. The
+			// selector WRAPS ProxyProvider.selector and returns its list
+			// verbatim whenever the pool is inert (mode OFF (default), static
+			// proxy configured, or SSL bypass enabled) — behavior identical to
+			// `.proxySelector(proxyProvider.selector)` in those states.
+			proxySelector(ProxyPoolSelector(settings, proxyProvider.selector, cookieJar))
 			proxyAuthenticator(proxyProvider.authenticator)
 			dns(DoHManager(cache, settings))
 			if (settings.isSSLBypassEnabled) {
@@ -85,7 +92,11 @@ interface NetworkModule {
 			if (BuildConfig.DEBUG) {
 				addInterceptor(CurlLoggingInterceptor())
 			}
-		}.build()
+		}.build().also { client ->
+			// Controller attach: lets the pool do lazy refreshes against the
+			// base client and persist state in cacheDir. Cheap, off-thread.
+			ProxyPoolController.attach(contextProvider.get(), settings, client)
+		}
 
 		@Provides
 		@Singleton
@@ -94,6 +105,26 @@ interface NetworkModule {
 			@BaseHttpClient baseClient: OkHttpClient,
 			commonHeadersInterceptor: CommonHeadersInterceptor,
 		): OkHttpClient = baseClient.newBuilder().apply {
+			addNetworkInterceptor(CacheLimitInterceptor())
+			addInterceptor(commonHeadersInterceptor)
+		}.build()
+
+		/**
+		 * Media/playback tier: same shape as the manga tier (cache limit +
+		 * common headers) but re-pinned to ProxyProvider's static selector,
+		 * so the experimental proxy pool is never used for video (spec 5.7 /
+		 * amendment 2). The static-proxy authenticator is inherited from the
+		 * base builder.
+		 */
+		@Provides
+		@Singleton
+		@VideoHttpClient
+		fun provideVideoHttpClient(
+			@BaseHttpClient baseClient: OkHttpClient,
+			commonHeadersInterceptor: CommonHeadersInterceptor,
+			proxyProvider: ProxyProvider,
+		): OkHttpClient = baseClient.newBuilder().apply {
+			proxySelector(proxyProvider.selector)
 			addNetworkInterceptor(CacheLimitInterceptor())
 			addInterceptor(commonHeadersInterceptor)
 		}.build()

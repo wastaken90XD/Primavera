@@ -24,6 +24,11 @@ import org.wastaken.kotatsu.api21.R
 import org.wastaken.kotatsu.api21.core.model.ZoomMode
 import org.wastaken.kotatsu.api21.core.network.DoHProvider
 import org.wastaken.kotatsu.api21.core.network.proxy.ProxyType
+import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_LISTS
+import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_MAX_HEALTHY
+import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_TEST_URL
+import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_MAX_HEALTHY_CAP
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolMode
 import org.wastaken.kotatsu.api21.core.util.ext.connectivityManager
 import org.wastaken.kotatsu.api21.booru.media.AspectRatioMode
 import org.wastaken.kotatsu.api21.booru.media.BooruLongPressAction
@@ -645,6 +650,35 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 	val proxySecret: String?
 		get() = prefs.getString(KEY_PROXY_SECRET, null)?.nullIfEmpty()
 
+	// Experimental proxy pool (defaults + docs in core/network/proxypool/)
+	val poolMode: PoolMode
+		get() = prefs.getEnumValue(KEY_POOL_MODE, PoolMode.OFF)
+
+	val poolLists: List<String>
+		get() = (prefs.getString(KEY_POOL_LISTS, null) ?: POOL_DEFAULT_LISTS)
+			.split('\n')
+			.map { it.trim() }
+			.filter { it.startsWith("http", ignoreCase = true) }
+
+	val poolTestUrl: String
+		get() = prefs.getString(KEY_POOL_TEST_URL, null)?.trim()
+			.takeIf { !it.isNullOrEmpty() && it.startsWith("https://") }
+			?: POOL_DEFAULT_TEST_URL
+
+	val poolMaxHealthy: Int
+		get() = (prefs.getString(KEY_POOL_MAX_HEALTHY, null)?.trim()?.toIntOrNull()
+			?: POOL_DEFAULT_MAX_HEALTHY).coerceIn(1, POOL_MAX_HEALTHY_CAP)
+
+	/** Manual always-direct hosts; subdomains included ("example.com" also matches "a.example.com"). */
+	val poolForbiddenHosts: Set<String>
+		get() = prefs.getString(KEY_POOL_FORBIDDEN_HOSTS, null)
+			?.split(',', '\n', ' ', '\t')
+			?.asSequence()
+			?.map { it.trim().lowercase() }
+			?.filter { it.isNotEmpty() }
+			?.toSet()
+			.orEmpty()
+
 	var localListOrder: SortOrder
 		get() = prefs.getEnumValue(KEY_LOCAL_LIST_ORDER, SortOrder.NEWEST)
 		set(value) = prefs.edit { putEnumValue(KEY_LOCAL_LIST_ORDER, value) }
@@ -1009,6 +1043,13 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_PROXY_LOGIN = "proxy_login"
 		const val KEY_PROXY_PASSWORD = "proxy_password"
 		const val KEY_PROXY_SECRET = "proxy_secret"
+
+		// Experimental proxy pool (revertable; components 1-5 in core/network/proxypool/)
+		const val KEY_POOL_MODE = "pool_mode"
+		const val KEY_POOL_LISTS = "pool_lists"
+		const val KEY_POOL_TEST_URL = "pool_test_url"
+		const val KEY_POOL_MAX_HEALTHY = "pool_max_healthy"
+		const val KEY_POOL_FORBIDDEN_HOSTS = "pool_forbidden_hosts"
 		const val KEY_IMAGES_PROXY = "images_proxy_2"
 
 		// Experimental wsrv.nl quality settings (revertable)
