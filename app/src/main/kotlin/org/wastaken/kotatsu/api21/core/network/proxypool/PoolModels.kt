@@ -6,6 +6,85 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 
 /**
+ * Operating mode of the proxy pool (pref value = enum name).
+ *
+ * The mode is read when the OkHttp clients are BUILT, because the routing
+ * interceptor is either installed or not: switching between OFF and any other
+ * mode needs an app restart (the settings screen says so). Switching between
+ * FALLBACK and ALWAYS is read per request and applies live.
+ */
+enum class PoolMode {
+	/** Default. Nothing from the pool is installed at all. */
+	OFF,
+
+	/** The existing route is tried first; pool routes are the fallback. */
+	FALLBACK,
+
+	/** Pool routes first; the existing route is only the fail-open tail. */
+	ALWAYS,
+}
+
+/**
+ * Which part of the app a request belongs to, decided by the client tier the
+ * routing interceptor was installed on - not by inspecting the request, which
+ * cannot tell a cover load from a backup upload.
+ */
+enum class PoolCategory {
+	/** Parser requests, listings, pages and the Coil image tier. */
+	SOURCES_IMAGES,
+
+	/** Playback and cover/video fetches on the @VideoHttpClient tier. */
+	VIDEO,
+
+	/** Everything on the base tier: updates, scrobbling, sync, backups. */
+	APP_SERVICES,
+}
+
+/** What a pooled client is built for; [key] is the pooled-client cache key. */
+sealed class PoolRoute {
+
+	abstract val key: String
+
+	abstract val proxy: Proxy
+
+	/**
+	 * Relay secret, present ONLY for relay routes. OkHttp sends it preemptively
+	 * through the route's proxyAuthenticator, so the relay sees it on the very
+	 * first CONNECT instead of after a 407 round trip.
+	 */
+	abstract val relayCredential: String?
+
+	/** One proxy, dialed directly. */
+	data class Single(val endpoint: ProxyEndpoint) : PoolRoute() {
+		override val key: String get() = "single ${endpoint.key}"
+		override val proxy: Proxy get() = endpoint.toProxy()
+		override val relayCredential: String? get() = null
+	}
+
+	/** The local relay, which chains gateway -> main proxy itself. */
+	class RelayRoute(val port: Int, private val credential: String) : PoolRoute() {
+		override val key: String get() = "relay 127.0.0.1:$port"
+		override val proxy: Proxy
+			get() = Proxy(Proxy.Type.HTTP, InetSocketAddress.createUnresolved("127.0.0.1", port))
+		override val relayCredential: String? get() = credential
+
+		override fun toString(): String = key
+	}
+}
+
+const val POOL_DEFAULT_MAX_HEALTHY = 20
+const val POOL_MAX_HEALTHY_CAP = 100
+
+/** HEAD-probed through each candidate during health checks; must answer HEAD with 2xx. */
+const val POOL_DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204"
+
+/** Verified 2026-10-04 (list formats + line counts + freshness in the 1/5 commit message). */
+const val POOL_DEFAULT_LISTS =
+	"https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt\n" +
+		"https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt\n" +
+		"https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"
+
+/**
  * One proxy hop.
  *
  * [host] may be a name; it is deliberately kept unresolved so the hop can hand

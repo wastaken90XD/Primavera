@@ -674,15 +674,46 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		get() = (prefs.getString(KEY_POOL_MAX_HEALTHY, null)?.trim()?.toIntOrNull()
 			?: POOL_DEFAULT_MAX_HEALTHY).coerceIn(1, POOL_MAX_HEALTHY_CAP)
 
-	/** Manual always-direct hosts; subdomains included ("example.com" also matches "a.example.com"). */
-	val poolForbiddenHosts: Set<String>
-		get() = prefs.getString(KEY_POOL_FORBIDDEN_HOSTS, null)
+	/**
+	 * Hosts the pool must never touch, comma/line separated; covers subdomains.
+	 * wsrv.nl and the Cloudflare worker relay are excluded in code, not here.
+	 */
+	val poolNeverUseHosts: Set<String>
+		get() = prefs.getString(KEY_POOL_NEVER_USE_HOSTS, null)
 			?.split(',', '\n', ' ', '\t')
 			?.asSequence()
 			?.map { it.trim().lowercase() }
 			?.filter { it.isNotEmpty() }
 			?.toSet()
 			.orEmpty()
+
+	/** Category switches, read per request, so they apply without a restart. */
+	val poolCategorySources: Boolean
+		get() = prefs.getBoolean(KEY_POOL_CATEGORY_SOURCES, true)
+
+	val poolCategoryVideo: Boolean
+		get() = prefs.getBoolean(KEY_POOL_CATEGORY_VIDEO, false)
+
+	val poolCategoryAppServices: Boolean
+		get() = prefs.getBoolean(KEY_POOL_CATEGORY_APP_SERVICES, false)
+
+	/** Connect-class failures on the existing route before a host is learned. */
+	val poolStrikeThreshold: Int
+		get() = (prefs.getString(KEY_POOL_STRIKES, null)?.trim()?.toIntOrNull() ?: 3).coerceIn(1, 20)
+
+	/** Pool failures tolerated for a learned host before it is unlearned. */
+	val poolHostChainFailureLimit: Int
+		get() = (prefs.getString(KEY_POOL_HOST_CHAIN_LIMIT, null)?.trim()?.toIntOrNull() ?: 3).coerceIn(1, 20)
+
+	/** Requests a host may stay on one route; 0 = stay until the route dies. */
+	val poolRotateAfterRequests: Int
+		get() = (prefs.getString(KEY_POOL_ROTATE_AFTER, null)?.trim()?.toIntOrNull() ?: 0).coerceIn(0, 1000)
+
+	val poolDirectTimeoutSeconds: Int
+		get() = (prefs.getString(KEY_POOL_DIRECT_TIMEOUT, null)?.trim()?.toIntOrNull() ?: 5).coerceIn(2, 60)
+
+	val poolChainTimeoutSeconds: Int
+		get() = (prefs.getString(KEY_POOL_CHAIN_TIMEOUT, null)?.trim()?.toIntOrNull() ?: 8).coerceIn(2, 60)
 
 	var localListOrder: SortOrder
 		get() = prefs.getEnumValue(KEY_LOCAL_LIST_ORDER, SortOrder.NEWEST)
@@ -1050,12 +1081,20 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_PROXY_PASSWORD = "proxy_password"
 		const val KEY_PROXY_SECRET = "proxy_secret"
 
-		// Experimental proxy pool (revertable; components 1-5 in core/network/proxypool/)
+		// Experimental proxy pool (revertable; components in core/network/proxypool/)
 		const val KEY_POOL_MODE = "pool_mode"
 		const val KEY_POOL_LISTS = "pool_lists"
 		const val KEY_POOL_TEST_URL = "pool_test_url"
 		const val KEY_POOL_MAX_HEALTHY = "pool_max_healthy"
-		const val KEY_POOL_FORBIDDEN_HOSTS = "pool_forbidden_hosts"
+		const val KEY_POOL_NEVER_USE_HOSTS = "pool_never_use_hosts"
+		const val KEY_POOL_CATEGORY_SOURCES = "pool_category_sources"
+		const val KEY_POOL_CATEGORY_VIDEO = "pool_category_video"
+		const val KEY_POOL_CATEGORY_APP_SERVICES = "pool_category_app_services"
+		const val KEY_POOL_STRIKES = "pool_strikes"
+		const val KEY_POOL_HOST_CHAIN_LIMIT = "pool_host_chain_limit"
+		const val KEY_POOL_ROTATE_AFTER = "pool_rotate_after"
+		const val KEY_POOL_DIRECT_TIMEOUT = "pool_direct_timeout"
+		const val KEY_POOL_CHAIN_TIMEOUT = "pool_chain_timeout"
 		const val KEY_IMAGES_PROXY = "images_proxy_2"
 
 		// Experimental wsrv.nl quality settings (revertable)

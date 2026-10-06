@@ -20,29 +20,9 @@
 		app:useSimpleSummaryProvider="true" />
 
 	<Preference
-		android:key="pool_status"
+		android:key="pool_restart_note"
 		android:persistent="false"
-		android:title="@string/pool_status_title" />
-
-	<EditTextPreference
-		android:key="pool_lists"
-		android:summary="@string/pool_lists_summary"
-		android:title="@string/pool_lists_title" />
-
-	<EditTextPreference
-		android:key="pool_test_url"
-		android:summary="@string/pool_test_url_summary"
-		android:title="@string/pool_test_url_title"
-		app:useSimpleSummaryProvider="true" />
-
-	<EditTextPreference
-		android:key="pool_max_healthy"
-		android:title="@string/pool_max_healthy_title"
-		app:useSimpleSummaryProvider="true" />
-
-	<EditTextPreference
-		android:key="pool_forbidden_hosts"
-		android:summary="@string/pool_forbidden_hosts_summary"
-		android:title="@string/pool_forbidden_hosts_title" />
+		android:selectable="false"
+		android:summary="@string/pool_restart_note" />
 
 </PreferenceScreen>
