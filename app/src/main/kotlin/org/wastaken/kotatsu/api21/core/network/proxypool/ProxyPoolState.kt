@@ -85,6 +85,9 @@ object ProxyPoolState {
 	/** host -> pool failures seen while learned; crossing the limit unlearns it. */
 	private val learnedHosts = ConcurrentHashMap<String, Int>()
 
+	/** host -> Cloudflare challenges served through the pool. */
+	private val challengeCounts = ConcurrentHashMap<String, Int>()
+
 	private val assignments = ConcurrentHashMap<String, PoolRoute>()
 	private val useCounts = ConcurrentHashMap<String, Int>()
 	private val rotation = AtomicInteger(0)
@@ -156,6 +159,19 @@ object ProxyPoolState {
 
 	/** True while this host is marked pool-first because its direct route fails. */
 	fun isLearnedHost(host: String): Boolean = learnedHosts.containsKey(host)
+
+	/** Read per request, so changing it applies without a restart. */
+	fun cookieMode(): PoolCookieMode = settingsRef?.poolCookieMode ?: PoolCookieMode.AUTO
+
+	/**
+	 * True once a host has been served too many Cloudflare challenges through the
+	 * pool: the proxies are the problem, not the route, so the host stops using
+	 * the pool until a refresh or Clear pool.
+	 */
+	fun isChallengeBlocked(host: String): Boolean {
+		val limit = settingsRef?.poolChallengeLimit ?: 2
+		return (challengeCounts[host] ?: 0) >= limit
+	}
 
 	// endregion
 
@@ -323,6 +339,22 @@ object ProxyPoolState {
 
 	private fun currentChain(): ChainRoute? = relayRef?.get()?.route
 
+	/**
+	 * A pooled response was a Cloudflare challenge. Not a transport failure: the
+	 * chain worked, the exit IP was refused. Counted per host, because hammering
+	 * more proxies at a host that challenges them only burns proxies.
+	 */
+	fun reportChallenge(host: String) {
+		val n = (challengeCounts[host] ?: 0) + 1
+		challengeCounts[host] = n
+		val limit = settingsRef?.poolChallengeLimit ?: 2
+		if (n >= limit) {
+			Log.w(TAG, "host=$host stopped using the pool: $n Cloudflare challenges through it")
+		} else {
+			Log.i(TAG, "host=$host served a Cloudflare challenge through the pool ($n/$limit)")
+		}
+	}
+
 	// endregion
 
 	// region failure classification
@@ -421,6 +453,9 @@ object ProxyPoolState {
 				if (report.error == null) {
 					ProxyHealthChecker.saveToCache(ctx.cacheDir, report)
 					healthy = report.healthy
+					// a fresh healthy set is a fresh start for challenge counting:
+					// the exits that were refused are usually not in it any more
+					challengeCounts.clear()
 				}
 				summary = buildSummary(parsed.reports, report)
 				Log.i(TAG, "refresh done: $summary")
@@ -460,6 +495,7 @@ object ProxyPoolState {
 	fun clearPool() {
 		healthy = emptyList()
 		strikes.clear()
+		challengeCounts.clear()
 		assignments.clear()
 		useCounts.clear()
 		learnedHosts.clear()

@@ -76,7 +76,8 @@ class ProxyPoolRoutingInterceptor(
 		if (method != "GET" && method != "HEAD") {
 			return false
 		}
-		return !ProxyPoolState.isNeverUse(request.url.host.lowercase())
+		val host = request.url.host.lowercase()
+		return !ProxyPoolState.isNeverUse(host) && !ProxyPoolState.isChallengeBlocked(host)
 	}
 
 	// region the two orders
@@ -130,6 +131,7 @@ class ProxyPoolRoutingInterceptor(
 		val outer = chain.call()
 		var lastError: IOException? = null
 		var attempts = 0
+		var challenges = 0
 		while (attempts < MAX_POOL_ATTEMPTS) {
 			if (outer.isCanceled()) {
 				throw lastError ?: IOException("canceled")
@@ -143,6 +145,14 @@ class ProxyPoolRoutingInterceptor(
 				val response = inner.execute()
 				if (isOriginAnswer(response.code)) {
 					return response
+				}
+				if (CloudflareChallenge.isChallenge(response)) {
+					// the chain worked, the exit IP was refused: close it, count it
+					// and try the next route instead of handing back a wall page
+					response.close()
+					ProxyPoolState.reportChallenge(host)
+					challenges++
+					continue
 				}
 				ProxyPoolState.reportSuccess(host, route)
 				if (ProxyPoolState.isLearnedHost(host)) {
@@ -169,7 +179,11 @@ class ProxyPoolRoutingInterceptor(
 				PoolCallCancellation.untrack(outer)
 			}
 		}
-		throw lastError ?: IOException("proxy pool has no usable route")
+		throw lastError ?: if (challenges > 0) {
+			IOException("Cloudflare challenge through $challenges pool route(s)")
+		} else {
+			IOException("proxy pool has no usable route")
+		}
 	}
 
 	private fun isOriginAnswer(code: Int): Boolean = code == 429 || code == 503

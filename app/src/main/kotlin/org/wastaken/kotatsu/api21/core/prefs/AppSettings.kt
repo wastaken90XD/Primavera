@@ -28,6 +28,7 @@ import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_LISTS
 import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_MAX_HEALTHY
 import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_TEST_URL
 import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_MAX_HEALTHY_CAP
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolCookieMode
 import org.wastaken.kotatsu.api21.core.network.proxypool.PoolMode
 import org.wastaken.kotatsu.api21.core.util.ext.connectivityManager
 import org.wastaken.kotatsu.api21.booru.media.AspectRatioMode
@@ -697,6 +698,14 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 	val poolCategoryAppServices: Boolean
 		get() = prefs.getBoolean(KEY_POOL_CATEGORY_APP_SERVICES, false)
 
+	/** What a pooled request may carry from the shared jar; Cloudflare cookies never travel. */
+	val poolCookieMode: PoolCookieMode
+		get() = prefs.getEnumValue(KEY_POOL_COOKIE_MODE, PoolCookieMode.AUTO)
+
+	/** Cloudflare challenges served through the pool before a host stops using it. */
+	val poolChallengeLimit: Int
+		get() = (prefs.getString(KEY_POOL_CHALLENGE_LIMIT, null)?.trim()?.toIntOrNull() ?: 2).coerceIn(1, 10)
+
 	/** Connect-class failures on the existing route before a host is learned. */
 	val poolStrikeThreshold: Int
 		get() = (prefs.getString(KEY_POOL_STRIKES, null)?.trim()?.toIntOrNull() ?: 3).coerceIn(1, 20)
@@ -1090,6 +1099,8 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_POOL_CATEGORY_SOURCES = "pool_category_sources"
 		const val KEY_POOL_CATEGORY_VIDEO = "pool_category_video"
 		const val KEY_POOL_CATEGORY_APP_SERVICES = "pool_category_app_services"
+		const val KEY_POOL_COOKIE_MODE = "pool_cookie_mode"
+		const val KEY_POOL_CHALLENGE_LIMIT = "pool_challenge_limit"
 		const val KEY_POOL_STRIKES = "pool_strikes"
 		const val KEY_POOL_HOST_CHAIN_LIMIT = "pool_host_chain_limit"
 		const val KEY_POOL_ROTATE_AFTER = "pool_rotate_after"

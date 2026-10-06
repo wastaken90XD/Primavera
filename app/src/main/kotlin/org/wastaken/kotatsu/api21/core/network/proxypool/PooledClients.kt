@@ -4,6 +4,7 @@ import okhttp3.Authenticator
 import okhttp3.OkHttpClient
 import org.wastaken.kotatsu.api21.core.network.CloudFlareInterceptor
 import org.wastaken.kotatsu.api21.core.network.CommonHeaders
+import org.wastaken.kotatsu.api21.core.network.cookies.MutableCookieJar
 import java.io.IOException
 import java.net.Proxy
 import java.net.ProxySelector
@@ -73,6 +74,11 @@ object PooledClients {
 			it is CloudFlareInterceptor || it is ProxyPoolRoutingInterceptor
 		}
 		builder.proxySelector(selectorFor(route.proxy))
+		// Only pooled clients see the filtering wrapper; the tiers keep the real
+		// shared jar, so a direct request still stores whatever the site sends.
+		(tier.cookieJar as? MutableCookieJar)?.let { shared ->
+			builder.cookieJar(FilteringCookieJar(shared) { ProxyPoolState.cookieMode() })
+		}
 		// Relay routes ONLY: the pooled client authenticates to our own relay with
 		// this run's secret. Single-proxy routes keep the inherited (static proxy)
 		// authenticator, which pool proxies never challenge, so it stays inert -
