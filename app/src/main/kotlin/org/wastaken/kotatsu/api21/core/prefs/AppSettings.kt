@@ -709,6 +709,13 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 			.map { it.trim() }
 			.filter { it.isNotEmpty() && !it.startsWith("#") }
 
+	/**
+	 * Accept bad certificates on PROXIED requests only. Off by default; the global
+	 * "Ignore SSL errors" switch does not imply this one.
+	 */
+	val poolIgnoreCertErrors: Boolean
+		get() = prefs.getBoolean(KEY_POOL_IGNORE_CERT_ERRORS, false)
+
 	val poolRelayTimeoutSeconds: Int
 		get() = (prefs.getString(KEY_POOL_RELAY_TIMEOUT, null)?.trim()?.toIntOrNull() ?: 8).coerceIn(2, 60)
 
@@ -1121,6 +1128,7 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_POOL_CHAIN_ENABLED = "pool_chain_enabled"
 		const val KEY_POOL_BOOTSTRAP_PROXIES = "pool_bootstrap_proxies"
 		const val KEY_POOL_RELAY_TIMEOUT = "pool_relay_timeout"
+		const val KEY_POOL_IGNORE_CERT_ERRORS = "pool_ignore_cert_errors"
 		const val KEY_POOL_DIRECT_TIMEOUT = "pool_direct_timeout"
 		const val KEY_POOL_CHAIN_TIMEOUT = "pool_chain_timeout"
 		const val KEY_IMAGES_PROXY = "images_proxy_2"

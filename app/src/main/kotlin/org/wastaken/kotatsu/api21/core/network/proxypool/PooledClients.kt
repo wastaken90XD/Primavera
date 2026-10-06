@@ -3,6 +3,8 @@ package org.wastaken.kotatsu.api21.core.network.proxypool
 import okhttp3.Authenticator
 import okhttp3.OkHttpClient
 import org.wastaken.kotatsu.api21.core.network.CloudFlareInterceptor
+import org.wastaken.kotatsu.api21.core.network.disableCertificateVerification
+import org.wastaken.kotatsu.api21.core.network.installExtraCertificates
 import org.wastaken.kotatsu.api21.core.network.CommonHeaders
 import org.wastaken.kotatsu.api21.core.network.cookies.MutableCookieJar
 import java.io.IOException
@@ -11,6 +13,7 @@ import java.net.ProxySelector
 import java.net.SocketAddress
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
+import javax.net.ssl.HttpsURLConnection
 
 /**
  * The pooled clients: one per distinct route, at most [MAX_CLIENTS], least
@@ -88,6 +91,22 @@ object PooledClients {
 		// shared jar, so a direct request still stores whatever the site sends.
 		(tier.cookieJar as? MutableCookieJar)?.let { shared ->
 			builder.cookieJar(FilteringCookieJar(shared) { ProxyPoolState.cookieMode() })
+		}
+		// Certificates. A pooled client is derived from a tier, so it would
+		// inherit whatever TLS the base client has - including the accept-all
+		// socket factory the global "Ignore SSL errors" switch installs. Proxied
+		// traffic is the one place where that is not acceptable by default: the
+		// peer is a stranger's proxy, so the pooled client re-establishes real
+		// verification with the SAME helper the base client uses. There is no
+		// second trust-all implementation here - the opt-in below calls the
+		// existing extension, and nothing else does.
+		if (ProxyPoolState.ignoreCertErrors()) {
+			builder.disableCertificateVerification()
+		} else {
+			ProxyPoolState.appContext()?.let { builder.installExtraCertificates(it) }
+			// the base client's accept-all hostname verifier must not survive the
+			// derivation either; this is the platform default OkHttp otherwise uses
+			builder.hostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier())
 		}
 		// Relay routes ONLY: the pooled client authenticates to our own relay with
 		// this run's secret. Single-proxy routes keep the inherited (static proxy)

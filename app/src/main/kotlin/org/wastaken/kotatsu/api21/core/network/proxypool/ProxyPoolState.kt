@@ -168,6 +168,17 @@ object ProxyPoolState {
 	fun cookieMode(): PoolCookieMode = settingsRef?.poolCookieMode ?: PoolCookieMode.AUTO
 
 	/**
+	 * The pool's own opt-in for accepting bad certificates on proxied requests.
+	 * Deliberately independent of the global SSL bypass: turning that on must not
+	 * silently turn off verification for traffic that leaves through a stranger's
+	 * proxy, and turning this on must not weaken the direct route.
+	 */
+	fun ignoreCertErrors(): Boolean = settingsRef?.poolIgnoreCertErrors ?: false
+
+	/** Application context for pooled-client construction (certificate assets). */
+	fun appContext(): Context? = contextRef?.get()
+
+	/**
 	 * True once a host has been served too many Cloudflare challenges through the
 	 * pool: the proxies are the problem, not the route, so the host stops using
 	 * the pool until a refresh or Clear pool.
