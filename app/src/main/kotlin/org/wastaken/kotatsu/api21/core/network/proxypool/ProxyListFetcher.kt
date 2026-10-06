@@ -126,35 +126,6 @@ object ProxyListFetcher {
 		val refreshedCopy: List<String>?,
 	)
 
-	/**
-	 * Transition shim for the legacy controller (removed in commit 3/7):
-	 * direct fetch of every url, no disk/mirror fallbacks. Kept green only
-	 * until the old refresh path is deleted.
-	 */
-	@Deprecated("legacy refresh path; superseded by fetchLists")
-	suspend fun fetch(baseClient: OkHttpClient, listUrls: List<String>): Result = coroutineScope {
-		val pas = listUrls.map { url ->
-			async(Dispatchers.IO) {
-				val dl = download(baseClient, url)
-				if (dl.error != null || dl.lines.isEmpty()) {
-					return@async Pair(
-						ListReport(url, ListSource.DIRECT, 0, 0, 0, dl.bytes, false,
-							dl.error ?: "empty"),
-						emptyList<ProxyEntry>(),
-					)
-				}
-				parseEntries(url, dl)
-			}
-		}.awaitAll()
-		val entries = LinkedHashSet<ProxyEntry>(pas.size * 64)
-		val reports = ArrayList<ListReport>(pas.size)
-		for (pa in pas) {
-			entries.addAll(pa.second)
-			reports += pa.first
-		}
-		Result(entries.toList(), reports)
-	}
-
 	// region one list
 
 	private data class Download(val lines: List<String>, val bytes: Long, val hitByteCap: Boolean, val error: String?)

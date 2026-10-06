@@ -81,11 +81,6 @@ object ProxyHealthChecker {
 	const val DEFAULT_TIMEOUT_S = 5
 	const val DEFAULT_CHAIN_TIMEOUT_S = 8
 
-	/** Legacy-only: the legacy controller still gates its LRU refresh on age;
-	 *  removed with the controller in commit 3/7. */
-	@Deprecated("event-driven rework: state is trusted until replaced")
-	const val STATE_MAX_AGE_MS = 30 * 60 * 1_000L
-
 	data class HealthyProxy(val entry: ProxyEntry, val latencyMs: Long)
 
 	data class HealthReport(
@@ -198,23 +193,6 @@ object ProxyHealthChecker {
 		}
 		Log.i(TAG, "verify-chains host=$host: ${sample.size} sampled, ${healthy.size} passed (keep $MAX_PER_HOST_KEEP)")
 		HealthReport(candidates.size, sample.size, System.currentTimeMillis(), healthy.take(MAX_PER_HOST_KEEP), null)
-	}
-
-	/**
-	 * Transition shim for the legacy controller (removed in 3/7): fetch the
-	 * lists on the legacy path, then run the direct pass.
-	 */
-	@Deprecated("legacy refresh path; superseded by the new controller in commit 3/7")
-	suspend fun refresh(
-		baseClient: OkHttpClient,
-		listUrls: List<String>,
-		testUrl: String,
-		maxHealthy: Int,
-	): Pair<ProxyListFetcher.Result, HealthReport> {
-		@Suppress("DEPRECATION")
-		val parsed = ProxyListFetcher.fetch(baseClient, listUrls)
-		val report = check(baseClient, parsed.entries, testUrl, maxHealthy)
-		return parsed to report
 	}
 
 	// endregion

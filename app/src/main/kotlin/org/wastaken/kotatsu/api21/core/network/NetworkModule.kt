@@ -17,10 +17,8 @@ import org.wastaken.kotatsu.api21.core.network.cookies.PreferencesCookieJar
 import org.wastaken.kotatsu.api21.core.network.imageproxy.ImageProxyInterceptor
 import org.wastaken.kotatsu.api21.core.network.imageproxy.RealImageProxyInterceptor
 import org.wastaken.kotatsu.api21.core.network.proxy.ProxyProvider
-import org.wastaken.kotatsu.api21.core.network.proxypool.PoolRouteInterceptor
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolRoutingInterceptor
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyPoolController
-import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyPoolRetryInterceptor
-import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyPoolSelector
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.core.util.ext.assertNotInMainThread
 import org.wastaken.kotatsu.api21.core.util.ext.printStackTraceDebug
@@ -74,12 +72,13 @@ interface NetworkModule {
 			readTimeout(60, TimeUnit.SECONDS)
 			writeTimeout(20, TimeUnit.SECONDS)
 			cookieJar(cookieJar)
-			// Proxy pool (experimental) component 3/5: single OkHttp hook. The
-			// selector WRAPS ProxyProvider.selector and returns its list
-			// verbatim whenever the pool is inert (mode OFF (default), static
-			// proxy configured, or SSL bypass enabled) — behavior identical to
-			// `.proxySelector(proxyProvider.selector)` in those states.
-			proxySelector(ProxyPoolSelector(settings, proxyProvider.selector, cookieJar))
+			// Proxy pool rework (Task C 3/7, amendment 1): the transport
+			// selector is ProxyProvider.selector, ALWAYS - the old wrapping
+			// ProxyPoolSelector is gone. The pool now routes per request via
+			// PoolRoutingInterceptor + pooled clients; with the pool OFF the
+			// interceptor is a pure pass-through, so this builder is exactly
+			// what a pool-less build would see (off = off).
+			proxySelector(proxyProvider.selector)
 			proxyAuthenticator(proxyProvider.authenticator)
 			dns(DoHManager(cache, settings))
 			if (settings.isSSLBypassEnabled) {
@@ -88,12 +87,13 @@ interface NetworkModule {
 				installExtraCertificates(contextProvider.get())
 			}
 			cache(cache)
-			// Proxy pool (experimental) component 4/5: retry wrapper sits
-			// OUTERMOST (registered first) so each retry re-runs the full
-			// chain; the route interceptor runs after Connect where the leg's
-			// actual proxy is known. Both are no-ops unless the pool is active.
-			addInterceptor(ProxyPoolRetryInterceptor(settings))
-			addNetworkInterceptor(PoolRouteInterceptor(settings))
+			// PoolRoutingInterceptor sits OUTERMOST (registered first): each
+			// direct attempt proceeds down the normal chain; each pooled
+			// attempt becomes its own call on a pooled client that inherits
+			// everything below except CloudFlare + this interceptor
+			// (amendment 4). Build-time wiring: Off<->any-mode applies after
+			// an app restart (amendment 3; note lives on the settings screen).
+			addInterceptor(PoolRoutingInterceptor(settings))
 			addInterceptor(GZipInterceptor())
 			addInterceptor(CloudFlareInterceptor())
 			addInterceptor(RateLimitInterceptor())
@@ -101,8 +101,8 @@ interface NetworkModule {
 				addInterceptor(CurlLoggingInterceptor())
 			}
 		}.build().also { client ->
-			// Controller attach: lets the pool do lazy refreshes against the
-			// base client and persist state in cacheDir. Cheap, off-thread.
+			// Controller attach: pins the build-time pool mode (amendment 3)
+			// and loads the saved health state. Cheap, off-thread.
 			ProxyPoolController.attach(contextProvider.get(), settings, client)
 		}
 
@@ -121,8 +121,10 @@ interface NetworkModule {
 		 * Media/playback tier: same shape as the manga tier (cache limit +
 		 * common headers) but re-pinned to ProxyProvider's static selector,
 		 * so the experimental proxy pool is never used for video (spec 5.7 /
-		 * amendment 2). The static-proxy authenticator is inherited from the
-		 * base builder.
+		 * Task-B guarantee). The routing interceptor is REMOVED here even
+		 * though every mode also skip-filters media hosts: belt and braces,
+		 * zero behavior ambiguity for ExoPlayer/AV streams. The static-proxy
+		 * authenticator is inherited from the base builder.
 		 */
 		@Provides
 		@Singleton
@@ -133,6 +135,7 @@ interface NetworkModule {
 			proxyProvider: ProxyProvider,
 		): OkHttpClient = baseClient.newBuilder().apply {
 			proxySelector(proxyProvider.selector)
+			interceptors().removeAll { it is PoolRoutingInterceptor }
 			addNetworkInterceptor(CacheLimitInterceptor())
 			addInterceptor(commonHeadersInterceptor)
 		}.build()
