@@ -1,6 +1,9 @@
 package org.wastaken.kotatsu.api21.core.network.proxypool
 
+import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyListFetcher.ProxyEntry
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyListFetcher.Scheme
+import java.net.InetSocketAddress
+import java.net.Proxy
 
 /**
  * One proxy hop.
@@ -45,3 +48,19 @@ enum class HopFailure(val logLabel: String) {
 	/** Both proxies answered, but the chain could not reach the target. */
 	TARGET_CONNECT_FAILED("target connect failed through the chain"),
 }
+
+/**
+ * A route OkHttp can dial. The address stays UNRESOLVED on purpose: for SOCKS
+ * routes OkHttp resolves it anyway (`RouteSelector` builds
+ * `createUnresolved` for `Proxy.Type.SOCKS`), and for HTTP routes the name only
+ * ever appears inside the CONNECT authority, which the proxy resolves.
+ */
+fun ProxyEndpoint.toProxy(): Proxy = Proxy(
+	when (scheme) {
+		Scheme.HTTP -> Proxy.Type.HTTP
+		Scheme.SOCKS4, Scheme.SOCKS5 -> Proxy.Type.SOCKS
+	},
+	InetSocketAddress.createUnresolved(host, port),
+)
+
+fun ProxyEntry.toEndpoint(): ProxyEndpoint = ProxyEndpoint(scheme, host, port)

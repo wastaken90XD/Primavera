@@ -4,6 +4,7 @@ import okhttp3.Authenticator
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.wastaken.kotatsu.api21.core.util.ext.printStackTraceDebug
+import java.io.IOException
 import java.net.Proxy
 import java.net.ProxySelector
 import java.net.SocketAddress
@@ -20,10 +21,11 @@ import java.util.concurrent.TimeUnit
  *  - at most MAX_LIST_LINES parsed per list.
  *
  * Transport discipline (spec section 3):
- *  - list downloads ALWAYS go direct: this class builds a transport from the
- *    app base client with Proxy.NO_PROXY and no authenticator, so neither the
- *    pool nor the user's static proxy nor the proxy authenticator can ever
- *    touch these requests;
+ *  - list downloads go direct: this class builds a transport from the app base
+ *    client with Proxy.NO_PROXY and no authenticator, so neither the pool nor
+ *    the user's static proxy nor the proxy authenticator can ever touch these
+ *    requests. The single exception is the bootstrap's second fetch, which the
+ *    caller explicitly pins to ONE named gateway (see [fetch]);
  *  - no cookie/UA fluff beyond what the base client already sets.
  *
  * Line formats supported:
@@ -77,10 +79,20 @@ object ProxyListFetcher {
 	/**
 	 * Downloads and parses all [listUrls]. Never throws: per-list failures are
 	 * captured into [ListReport.error] so one bad URL cannot kill the batch.
+	 *
+	 * [viaGateway] is normally null (lists are fetched direct, as above). The
+	 * bootstrap cycle passes a gateway for the SECOND list fetch, which is the
+	 * one that replaces the on-disk copy: lists that are only reachable from
+	 * behind the gateway - or that a censor serves differently to the device's
+	 * own IP - are exactly the lists worth having when the pool is in use.
 	 */
-	suspend fun fetch(baseClient: OkHttpClient, listUrls: List<String>): Result {
+	suspend fun fetch(
+		baseClient: OkHttpClient,
+		listUrls: List<String>,
+		viaGateway: ProxyEndpoint? = null,
+	): Result {
 		val transport = baseClient.newBuilder()
-			.proxySelector(DIRECT_SELECTOR)
+			.proxySelector(if (viaGateway == null) DIRECT_SELECTOR else selectorFor(viaGateway))
 			.proxyAuthenticator(Authenticator.NONE)
 			.connectTimeout(CONNECT_TIMEOUT_S, TimeUnit.SECONDS)
 			.readTimeout(READ_TIMEOUT_S, TimeUnit.SECONDS)
@@ -92,6 +104,11 @@ object ProxyListFetcher {
 			reports += fetchOne(transport, url.trim(), all)
 		}
 		return Result(all.toList(), reports)
+	}
+
+	private fun selectorFor(endpoint: ProxyEndpoint): ProxySelector = object : ProxySelector() {
+		override fun select(uri: URI?): List<Proxy> = listOf(endpoint.toProxy())
+		override fun connectFailed(uri: URI?, sa: SocketAddress?, ioe: IOException?) = Unit
 	}
 
 	private fun fetchOne(
