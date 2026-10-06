@@ -21,6 +21,12 @@
 		android:title="@string/reader_settings" />
 
 	<PreferenceScreen
+		android:fragment="org.wastaken.kotatsu.api21.settings.MediaPlayerSettingsFragment"
+		android:icon="@drawable/ic_play"
+		android:key="media_player"
+		android:title="@string/media_player_settings" />
+
+	<PreferenceScreen
 		android:fragment="org.wastaken.kotatsu.api21.settings.NetworkSettingsFragment"
 		android:icon="@drawable/ic_web"
 		android:key="network"

@@ -27,6 +27,7 @@ import org.wastaken.kotatsu.api21.core.exceptions.resolve.SnackbarErrorObserver
 import org.wastaken.kotatsu.api21.core.image.CoilMemoryCacheKey
 import org.wastaken.kotatsu.api21.core.model.MangaSource
 import org.wastaken.kotatsu.api21.core.nav.AppRouter
+import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.core.ui.BaseActivity
 import org.wastaken.kotatsu.api21.core.ui.util.PopupMenuMediator
 import org.wastaken.kotatsu.api21.core.util.ShareHelper
@@ -54,6 +55,9 @@ class ImageActivity : BaseActivity<ActivityImageBinding>(),
 	@Inject
 	lateinit var coil: ImageLoader
 
+	@Inject
+	lateinit var settings: AppSettings
+
 	private var errorBinding: ItemErrorStateBinding? = null
 	private val viewModel: ImageViewModel by viewModels()
 	private lateinit var menuMediator: PopupMenuMediator
@@ -68,6 +72,7 @@ class ImageActivity : BaseActivity<ActivityImageBinding>(),
 			activity = this,
 			snackbarHost = viewBinding.root,
 			viewModel = viewModel,
+			settings = settings,
 		)
 		menuMediator = PopupMenuMediator(menuProvider)
 		viewModel.isLoading.observe(this, ::onLoadingStateChanged)

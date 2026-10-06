@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen
+	xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto"
+	android:title="@string/proxy_pool">
+
+	<Preference
+		android:key="pool_disclosure"
+		android:persistent="false"
+		android:selectable="false"
+		android:title="@string/pool_disclosure" />
+
+	<ListPreference
+		android:defaultValue="OFF"
+		android:entries="@array/proxy_pool_modes"
+		android:entryValues="@array/values_proxy_pool_modes"
+		android:key="pool_mode"
+		android:title="@string/proxy_pool"
+		app:allowDividerAbove="true"
+		app:useSimpleSummaryProvider="true" />
+
+	<Preference
+		android:key="pool_restart_note"
+		android:persistent="false"
+		android:selectable="false"
+		android:summary="@string/pool_restart_note" />
+
+	<Preference
+		android:key="pool_status"
+		android:persistent="false"
+		android:title="@string/pool_status_title" />
+
+	<PreferenceCategory android:title="@string/pool_section_routing">
+
+		<SwitchPreferenceCompat
+			android:defaultValue="true"
+			android:key="pool_category_sources"
+			android:summary="@string/pool_route_sources_summary"
+			android:title="@string/pool_route_sources_title" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="false"
+			android:key="pool_category_video"
+			android:summary="@string/pool_route_video_summary"
+			android:title="@string/pool_route_video_title" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="false"
+			android:key="pool_category_app_services"
+			android:summary="@string/pool_route_app_services_summary"
+			android:title="@string/pool_route_app_services_title" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="false"
+			android:key="pool_chain_enabled"
+			android:summary="@string/pool_chain_summary"
+			android:title="@string/pool_chain_title" />
+
+		<ListPreference
+			android:defaultValue="AUTO"
+			android:entries="@array/pool_cookie_modes"
+			android:entryValues="@array/values_pool_cookie_modes"
+			android:key="pool_cookie_mode"
+			android:summary="@string/pool_cookie_mode_summary"
+			android:title="@string/pool_cookie_mode_title"
+			app:useSimpleSummaryProvider="true" />
+
+		<SwitchPreferenceCompat
+			android:defaultValue="false"
+			android:key="pool_ignore_cert_errors"
+			android:summary="@string/pool_ignore_cert_summary"
+			android:title="@string/pool_ignore_cert_title" />
+
+	</PreferenceCategory>
+
+	<PreferenceCategory android:title="@string/pool_section_lists">
+
+		<EditTextPreference
+			android:key="pool_lists"
+			android:summary="@string/pool_lists_summary"
+			android:title="@string/pool_lists_title" />
+
+		<EditTextPreference
+			android:key="pool_bootstrap_proxies"
+			android:summary="@string/pool_bootstrap_summary"
+			android:title="@string/pool_bootstrap_title" />
+
+		<EditTextPreference
+			android:key="pool_test_url"
+			android:summary="@string/pool_test_url_summary"
+			android:title="@string/pool_test_url_title"
+			app:useSimpleSummaryProvider="true" />
+
+		<EditTextPreference
+			android:key="pool_never_use_hosts"
+			android:summary="@string/pool_never_use_summary"
+			android:title="@string/pool_never_use_title" />
+
+	</PreferenceCategory>
+
+	<PreferenceCategory android:title="@string/pool_section_limits">
+
+		<EditTextPreference
+			android:key="pool_max_healthy"
+			android:title="@string/pool_max_healthy_title"
+			app:useSimpleSummaryProvider="true" />
+
+		<EditTextPreference
+			android:key="pool_strikes"
+			android:summary="@string/pool_strikes_summary"
+			android:title="@string/pool_strikes_title"
+			app:useSimpleSummaryProvider="true" />
+
+		<EditTextPreference
+			android:key="pool_host_chain_limit"
+			android:title="@string/pool_host_chain_title"
+			app:useSimpleSummaryProvider="true" />
+
+		<EditTextPreference
+			android:key="pool_challenge_limit"
+			android:title="@string/pool_challenge_limit_title"
+			app:useSimpleSummaryProvider="true" />
+
+		<EditTextPreference
+			android:key="pool_rotate_after"
+			android:summary="@string/pool_rotate_summary"
+			android:title="@string/pool_rotate_title"
+			app:useSimpleSummaryProvider="true" />
+
+		<EditTextPreference
+			android:key="pool_direct_timeout"
+			android:title="@string/pool_direct_timeout_title"
+			app:useSimpleSummaryProvider="true" />
+
+		<EditTextPreference
+			android:key="pool_chain_timeout"
+			android:title="@string/pool_chain_timeout_title"
+			app:useSimpleSummaryProvider="true" />
+
+		<EditTextPreference
+			android:key="pool_relay_timeout"
+			android:title="@string/pool_relay_timeout_title"
+			app:useSimpleSummaryProvider="true" />
+
+	</PreferenceCategory>
+
+	<PreferenceCategory android:title="@string/pool_section_actions">
+
+		<Preference
+			android:key="pool_action_refresh"
+			android:persistent="false"
+			android:title="@string/pool_action_refresh" />
+
+		<Preference
+			android:key="pool_action_clear_pool"
+			android:persistent="false"
+			android:title="@string/pool_action_clear_pool" />
+
+		<Preference
+			android:key="pool_action_clear_bans"
+			android:persistent="false"
+			android:title="@string/pool_action_clear_bans" />
+
+		<Preference
+			android:key="pool_action_clear_learned"
+			android:persistent="false"
+			android:title="@string/pool_action_clear_learned" />
+
+	</PreferenceCategory>
+
+</PreferenceScreen>
