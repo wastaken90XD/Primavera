@@ -431,7 +431,7 @@ object ProxyPoolController {
 				val h = healthy[(start + i) % healthy.size]
 				val key = proxyKeyOf(h.entry)
 				if (key in failed || key in droppedProxyKeys) continue
-				if (out.any { proxyKeyOf(it.proxy.entry) == key }) continue
+				if (out.any { routeProxyKey(it) == key }) continue
 				out += RoutePlan.ViaProxy(h)
 			}
 		}
@@ -440,7 +440,7 @@ object ProxyPoolController {
 		if (host in challengedHosts) {
 			for (c in chainRoutesFor(host)) {
 				if (out.size >= POOL_PLAN_CAP) break
-				if (out.any { proxyKeyOf(it.proxy.entry) == proxyKeyOf(c.proxy.entry) }) continue
+				if (out.any { routeProxyKey(it) == proxyKeyOf(c.proxy.entry) }) continue
 				out += c
 			}
 		}
@@ -627,6 +627,13 @@ object ProxyPoolController {
 		RoutePlan.Direct -> throw IllegalArgumentException("direct route has no proxy")
 	}
 
+	/** Route key for dedup scans over mixed-route plan lists (null for Direct). */
+	private fun routeProxyKey(route: RoutePlan): String? = when (route) {
+		is RoutePlan.ViaProxy -> proxyKeyOf(route.proxy.entry)
+		is RoutePlan.ViaChain -> proxyKeyOf(route.proxy.entry)
+		RoutePlan.Direct -> null
+	}
+
 	// region relay / gateway plumbing (5/7)
 
 	/**
@@ -695,13 +702,13 @@ object ProxyPoolController {
 		synchronized(chainTokens) {
 			val token = chainTokens[key] ?: "c" + relayTokenSeq.getAndIncrement().toString(16)
 			chainTokens[key] = token
-			r.bindChainToken(
-				token,
-				ProxyChainRelay.ChainBundle(
-					gateway = gw,
-					main = ProxyChainRelay.Hop(entry.scheme, entry.host, entry.port, null, null),
-				),
-			)
+				r.bindChainToken(
+					token,
+					ProxyChainRelay.ChainBundle(
+						gateway = gw,
+						main = ProxyChainRelay.Hop(entry.scheme, entry.host, entry.port),
+					),
+				)
 			return token
 		}
 	}
@@ -862,8 +869,15 @@ object ProxyPoolController {
 	 * when no static proxy is configured.
 	 */
 	private fun gatewayTransportOrNull(base: OkHttpClient): OkHttpClient? {
+		val s = settingsRef ?: return null
+		if (s.proxyType == ProxyType.DIRECT) {
+			return null
+		}
+		val addrOk = !s.proxyAddress.isNullOrBlank() && s.proxyPort in 1..65535
+		if (!addrOk) {
+			return null
+		}
 		val provider = proxyProviderRef?.get() ?: return null
-		provider.proxy ?: return null
 		return base.newBuilder()
 			.proxySelector(provider.selector)
 			.proxyAuthenticator(provider.authenticator)
