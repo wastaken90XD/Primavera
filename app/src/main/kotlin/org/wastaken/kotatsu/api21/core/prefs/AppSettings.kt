@@ -698,6 +698,20 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 	val poolCategoryAppServices: Boolean
 		get() = prefs.getBoolean(KEY_POOL_CATEGORY_APP_SERVICES, false)
 
+	/** Two proxies in series (gateway -> main proxy) through the local relay. */
+	val poolChainEnabled: Boolean
+		get() = prefs.getBoolean(KEY_POOL_CHAIN_ENABLED, false)
+
+	/** Gateway candidates tried before falling back to proxies found in the lists. */
+	val poolBootstrapProxies: List<String>
+		get() = (prefs.getString(KEY_POOL_BOOTSTRAP_PROXIES, null) ?: "")
+			.split('\n', ',', ' ')
+			.map { it.trim() }
+			.filter { it.isNotEmpty() && !it.startsWith("#") }
+
+	val poolRelayTimeoutSeconds: Int
+		get() = (prefs.getString(KEY_POOL_RELAY_TIMEOUT, null)?.trim()?.toIntOrNull() ?: 8).coerceIn(2, 60)
+
 	/** What a pooled request may carry from the shared jar; Cloudflare cookies never travel. */
 	val poolCookieMode: PoolCookieMode
 		get() = prefs.getEnumValue(KEY_POOL_COOKIE_MODE, PoolCookieMode.AUTO)
@@ -1104,6 +1118,9 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_POOL_STRIKES = "pool_strikes"
 		const val KEY_POOL_HOST_CHAIN_LIMIT = "pool_host_chain_limit"
 		const val KEY_POOL_ROTATE_AFTER = "pool_rotate_after"
+		const val KEY_POOL_CHAIN_ENABLED = "pool_chain_enabled"
+		const val KEY_POOL_BOOTSTRAP_PROXIES = "pool_bootstrap_proxies"
+		const val KEY_POOL_RELAY_TIMEOUT = "pool_relay_timeout"
 		const val KEY_POOL_DIRECT_TIMEOUT = "pool_direct_timeout"
 		const val KEY_POOL_CHAIN_TIMEOUT = "pool_chain_timeout"
 		const val KEY_IMAGES_PROXY = "images_proxy_2"

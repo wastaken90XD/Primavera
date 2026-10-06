@@ -107,6 +107,10 @@ object ProxyPoolState {
 				summary = "loaded ${cached.size} cached entries"
 				Log.i(TAG, "cold start: ${cached.size} cached healthy entries")
 			}
+			if (settings.poolChainEnabled) {
+				// chain mode needs a gateway before it can serve anything
+				refreshAsync(force = false)
+			}
 		}
 	}
 
@@ -184,6 +188,7 @@ object ProxyPoolState {
 	 * does not spray its requests over a dozen exit IPs.
 	 */
 	fun nextRoute(host: String): PoolRoute? {
+		syncRelay()
 		val routes = availableRoutes()
 		if (routes.isEmpty()) {
 			// demand-triggered, not clock-triggered: an empty pool asks for a
@@ -242,6 +247,52 @@ object ProxyPoolState {
 
 	@Volatile
 	private var relayRef: WeakReference<ProxyChainRelay>? = null
+
+	/** The relay the chain routes dial, if one is running. */
+	fun relay(): ProxyChainRelay? = relayRef?.get()
+
+	/** Called by the bootstrap with the result of a health pass. */
+	internal fun publishHealth(report: HealthReport) {
+		if (report.error != null) {
+			return
+		}
+		healthy = report.healthy
+		// a fresh healthy set is a fresh start for challenge counting: the exits
+		// that were refused are usually not in it any more
+		challengeCounts.clear()
+	}
+
+	internal fun publishGateway(endpoint: ProxyEndpoint?) {
+		gateway = endpoint
+	}
+
+	/**
+	 * Stops the relay and forgets the chain. Called as soon as chain mode is off -
+	 * checked on every routing decision, not on a timer - and by Clear pool, so a
+	 * disabled chain never leaves a listener behind.
+	 */
+	fun stopRelay() {
+		val relay = relayRef?.get()
+		if (relay != null && relay.isRunning) {
+			relay.stop()
+			Log.i(TAG, "relay stopped")
+		}
+		if (relayPort != 0) {
+			PooledClients.remove(PoolRoute.RelayRoute(relayPort, "").key)
+		}
+		relayPort = 0
+		gateway = null
+	}
+
+	/** Live check, so switching chain mode off closes the relay without a restart. */
+	private fun syncRelay() {
+		if (settingsRef?.poolChainEnabled == true) {
+			return
+		}
+		if (relayPort != 0 || relayRef?.get()?.isRunning == true) {
+			stopRelay()
+		}
+	}
 
 	/** Publishes the relay the chain routes dial, and listens for hop failures. */
 	fun attachRelay(relay: ProxyChainRelay) {
@@ -430,9 +481,6 @@ object ProxyPoolState {
 		if (refreshing && !force) {
 			return
 		}
-		val lists = s.poolLists
-		val testUrl = s.poolTestUrl
-		val maxHealthy = s.poolMaxHealthy
 		scope.launch {
 			if (force) {
 				refreshMutex.lock()
@@ -441,23 +489,12 @@ object ProxyPoolState {
 			}
 			try {
 				refreshing = true
-				val (parsed, report) = ProxyHealthChecker.refresh(
-					baseClient = client,
-					listUrls = lists,
-					testUrl = testUrl,
-					maxHealthy = maxHealthy,
-					gateway = null,
-					timeoutMs = s.poolDirectTimeoutSeconds * 1000,
-					callTimeoutMs = ProxyHealthChecker.DEFAULT_CALL_TIMEOUT_MS,
-				)
-				if (report.error == null) {
-					ProxyHealthChecker.saveToCache(ctx.cacheDir, report)
-					healthy = report.healthy
-					// a fresh healthy set is a fresh start for challenge counting:
-					// the exits that were refused are usually not in it any more
-					challengeCounts.clear()
+				summary = if (s.poolChainEnabled) {
+					ProxyPoolBootstrap.runCycle(client, ctx, s)
+				} else {
+					stopRelay()
+					ProxyPoolBootstrap.refreshSingles(client, ctx, s)
 				}
-				summary = buildSummary(parsed.reports, report)
 				Log.i(TAG, "refresh done: $summary")
 			} catch (e: Exception) {
 				e.printStackTraceDebug()
@@ -467,14 +504,6 @@ object ProxyPoolState {
 				refreshMutex.unlock()
 			}
 		}
-	}
-
-	private fun buildSummary(reports: List<ProxyListFetcher.ListReport>, health: HealthReport): String {
-		val ok = reports.count { it.error == null }
-		val failed = reports.size - ok
-		return "${health.healthy.size} healthy of ${health.sampled} sampled " +
-			"(${health.candidatesTotal} entries, $ok lists OK/$failed failed, " +
-			"via ${health.viaGateway?.host ?: "direct"})"
 	}
 
 	/** Human-readable status for the settings screen. */
@@ -493,6 +522,7 @@ object ProxyPoolState {
 	// region user actions
 
 	fun clearPool() {
+		stopRelay()
 		healthy = emptyList()
 		strikes.clear()
 		challengeCounts.clear()

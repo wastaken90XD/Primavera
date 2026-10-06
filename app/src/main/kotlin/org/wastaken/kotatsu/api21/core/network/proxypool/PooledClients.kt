@@ -68,6 +68,16 @@ object PooledClients {
 		cache.clear()
 	}
 
+	/**
+	 * Drops one derived client. Used when the relay goes away: a relay client
+	 * caches its route's secret, and a relay that restarts has a new one even if
+	 * the loopback port happens to come back the same.
+	 */
+	@Synchronized
+	fun remove(routeKey: String) {
+		cache.remove(routeKey)
+	}
+
 	private fun build(tier: OkHttpClient, route: PoolRoute): OkHttpClient {
 		val builder = tier.newBuilder()
 		builder.interceptors().removeAll {
