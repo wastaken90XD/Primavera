@@ -29,6 +29,8 @@ import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_MAX_HEALTH
 import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_TEST_URL
 import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_MAX_HEALTHY_CAP
 import org.wastaken.kotatsu.api21.core.network.proxypool.PoolMode
+import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyHealthChecker
+import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyListFetcher
 import org.wastaken.kotatsu.api21.core.util.ext.connectivityManager
 import org.wastaken.kotatsu.api21.booru.media.AspectRatioMode
 import org.wastaken.kotatsu.api21.booru.media.BooruLongPressAction
@@ -684,6 +686,27 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 			?.toSet()
 			.orEmpty()
 
+	/** Mirror list URLs (Task C 4.6.2 step a): full alternates fetched when a
+	 *  list's direct fetch and its last-good disk copy both fail. Defaults are
+	 *  the jsDelivr forms of the stock lists (fetch_page-verified 2026-10-06). */
+	val poolMirrors: List<String>
+		get() = (prefs.getString(KEY_POOL_MIRRORS, null) ?: ProxyListFetcher.POOL_DEFAULT_MIRRORS)
+			.split('\n')
+			.map { it.trim() }
+			.filter { it.startsWith("http", ignoreCase = true) }
+
+	/** Per-probe timeout for DIRECT candidate checks (seconds, user-set, spec
+	 *  4.6.1; the value the picker shows). */
+	val poolTimeoutDirectS: Int
+		get() = (prefs.getString(KEY_POOL_TIMEOUT_DIRECT_S, null)?.trim()?.toIntOrNull()
+			?: ProxyHealthChecker.DEFAULT_TIMEOUT_S).coerceIn(1, 60)
+
+	/** Per-probe timeout for CHAIN checks (seconds, user-set, spec 4.6.2;
+	 *  chains cost two extra handshakes, so the default is higher). */
+	val poolTimeoutChainS: Int
+		get() = (prefs.getString(KEY_POOL_TIMEOUT_CHAIN_S, null)?.trim()?.toIntOrNull()
+			?: ProxyHealthChecker.DEFAULT_CHAIN_TIMEOUT_S).coerceIn(1, 60)
+
 	var localListOrder: SortOrder
 		get() = prefs.getEnumValue(KEY_LOCAL_LIST_ORDER, SortOrder.NEWEST)
 		set(value) = prefs.edit { putEnumValue(KEY_LOCAL_LIST_ORDER, value) }
@@ -1056,6 +1079,9 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_POOL_TEST_URL = "pool_test_url"
 		const val KEY_POOL_MAX_HEALTHY = "pool_max_healthy"
 		const val KEY_POOL_FORBIDDEN_HOSTS = "pool_forbidden_hosts"
+		const val KEY_POOL_MIRRORS = "pool_mirrors"
+		const val KEY_POOL_TIMEOUT_DIRECT_S = "pool_timeout_direct_s"
+		const val KEY_POOL_TIMEOUT_CHAIN_S = "pool_timeout_chain_s"
 		const val KEY_IMAGES_PROXY = "images_proxy_2"
 
 		// Experimental wsrv.nl quality settings (revertable)

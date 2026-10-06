@@ -21,50 +21,70 @@ import java.net.ProxySelector
 import java.net.SocketAddress
 import java.net.URI
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Proxy pool (experimental) - component 2/5: health checking.
+ * Proxy pool (Task C) - commit 2/7 rework: health checking and host
+ * verification (spec 4.6.1/4.6.2/4.6.4), event driven (4.4).
  *
- * Contract from the spec section 5.2:
- *  - sample at most SAMPLE_SIZE (200) random candidates per pass;
- *  - test at most PARALLELISM (6) in parallel;
- *  - timeout per candidate: socket connect/read of SOCKET_TIMEOUT_MS (6s),
- *    with a hard CALL_TIMEOUT_MS (13s) ceiling for the whole attempt;
- *  - a candidate passes ONLY if it completes a full HTTPS request through
- *    itself to the test URL with NORMAL certificate verification and gets a
- *    success-class status (2xx/3xx). Any certificate error automatically
- *    makes the candidate ineligible here, because the health client uses
- *    the app's real TLS context - a proxy that intercepts TLS fails before
- *    any ban logic is even needed. (The explicit 24h ban for cert errors is
- *    enforced one layer up in the pool state when production traffic flags
- *    one - see component 3.)
- *  - the health transport is cookie-less (CookieJar.NO_COOKIES) and does not
- *    use any authenticator: health checks never leak the user's session
+ *  - Direct candidate checks sample at most DIRECT_SAMPLE_CAP (150) random
+ *    candidates per pass, at most PARALLELISM (6) probes in parallel; the
+ *    per-candidate timeout is USER-SET (settings, default 5 s) with a fixed
+ *    formula call ceiling (2*timeout + 1 s) for the whole attempt. No
+ *    schedule decides WHEN a check runs - the controller triggers passes on
+ *    user action, bootstrap, and exhaustion signals only (4.4).
+ *  - A candidate passes ONLY if it completes a full HTTPS request through
+ *    itself to the probe URL with NORMAL certificate verification and a
+ *    success-class status. Any certificate error makes the candidate
+ *    ineligible here, because the health client uses the app's real TLS
+ *    context (the explicit 24h ban for cert errors seen on production
+ *    traffic is enforced one layer up - unchanged rule).
+ *  - Chain probes run through the relay as ISOLATED token-bound chains
+ *    (amendment-4 groundwork): each probe binds its own token to
+ *    (gateway, candidate-main), so six parallel probes never share a
+ *    binding, and the hop-level failure classes (amendment 9) appear in the
+ *    ProxyPool log straight from the relay.
+ *  - Host verification (4.6.4): GET https://host (Range-free, the page head
+ *    is what challenge pages answer), a candidate passes iff status is
+ *    200..299 AND the response is not a Cloudflare challenge
+ *    (PoolChallengeDetector, amendment 6). Sample cap 60 per host.
+ *  - The health transport is cookie-less (CookieJar.NO_COOKIES) and uses no
+ *    outside authenticator: health probes never leak the user's session
  *    state to a proxy.
  *
- * Hostnames (not IP literals) that resolve to loopback / link-local /
- * RFC1918 are rejected HERE, at the point where DNS resolution first
- * happens cheaply - literal rejections already ran in the fetcher.
- *
  * Persistence: healthy entries are kept as a small plain-text state file in
- * the cache directory ("proxy_pool_state.txt") with a millisecond timestamp;
- * entries older than STATE_MAX_AGE_MS (30 min) are ignored unless re-checked.
- * Plain text, not JSON - no extra libs, easily greppable in support dumps.
+ * the cache directory. The state is TRUSTED UNTIL A SUCCESSFUL PASS
+ * REPLACES IT (event driven 4.4): no age gate anywhere. The STATE_MAX_AGE_MS
+ * constant survives only to keep the legacy controller compiling; it is
+ * removed together with the controller in commit 3/7.
  *
- * Revertability: deleting this file removes the component; it does not
- * change any other component's behavior (the fetcher's parser stays usable
- * standalone).
+ * Revertability: deleting this file (with its two controller call sites)
+ * removes the component; no other component changes behavior.
  */
 object ProxyHealthChecker {
 
 	private const val TAG = "ProxyPool"
-	private const val SAMPLE_SIZE = 200
 	private const val PARALLELISM = 6
-	private const val SOCKET_TIMEOUT_MS = 6_000
-	private const val CALL_TIMEOUT_MS = 13_000
-	const val STATE_MAX_AGE_MS = 30 * 60 * 1_000L
+	private const val DIRECT_SAMPLE_CAP = 150
+	private const val CHAIN_SAMPLE_CAP = 120
+	private const val HOST_VERIFY_CAP = 60
+	private const val MAX_PER_HOST_KEEP = 5
 	private const val STATE_FILE = "proxy_pool_state.txt"
 	private const val STATE_VERSION = 1
+
+	/** Generic-liveness pass: 2xx/3xx (class doc rule). */
+	private val GENERIC_SUCCESS_RANGE = 200..399
+
+	/** Host-verify pass: strictly 200..299 per spec 4.6.4. */
+	private val VERIFY_SUCCESS_RANGE = 200..299
+
+	const val DEFAULT_TIMEOUT_S = 5
+	const val DEFAULT_CHAIN_TIMEOUT_S = 8
+
+	/** Legacy-only: the legacy controller still gates its LRU refresh on age;
+	 *  removed with the controller in commit 3/7. */
+	@Deprecated("event-driven rework: state is trusted until replaced")
+	const val STATE_MAX_AGE_MS = 30 * 60 * 1_000L
 
 	data class HealthyProxy(val entry: ProxyEntry, val latencyMs: Long)
 
@@ -74,58 +94,168 @@ object ProxyHealthChecker {
 		val checkedAtMs: Long,
 		val healthy: List<HealthyProxy>,
 		// class-simple name per failed candidate is intentionally NOT kept:
-		// 200 health failures are not diagnostics we want in support dumps
+		// a mass of probe failures is not diagnostics we want in support dumps
 		val error: String?,
 	)
 
+	// region public passes
+
 	/**
-	 * Runs a full health pass. Never throws: a broken search URL or an
-	 * unreachable test endpoint reports [HealthReport.error] instead.
+	 * Direct candidate pass over the generic test URL. Never throws: a broken
+	 * probe URL or an unreachable endpoint reports [HealthReport.error].
 	 */
 	suspend fun check(
 		baseClient: OkHttpClient,
 		candidates: List<ProxyEntry>,
 		testUrl: String,
 		maxHealthy: Int,
+		timeoutS: Int = DEFAULT_TIMEOUT_S,
 	): HealthReport = coroutineScope {
 		if (!testUrl.startsWith("https://")) {
 			return@coroutineScope HealthReport(candidates.size, 0, 0L, emptyList(), "testUrl is not https")
 		}
-		val sample = candidates.shuffled().take(SAMPLE_SIZE)
-		val semaphore = Semaphore(PARALLELISM)
+		val sample = candidates.shuffled().take(DIRECT_SAMPLE_CAP)
 		val probe = Request.Builder().url(testUrl).head().build()
-		val results = sample.map { entry ->
+		val healthy = probeAll(sample) { entry ->
+			probeDirect(baseClient, entry, probe, timeoutS, GENERIC_SUCCESS_RANGE)
+		}
+		Log.i(
+			TAG,
+			"health: ${candidates.size} candidates, ${sample.size} sampled, ${healthy.size} healthy (cap $maxHealthy)",
+		)
+		HealthReport(candidates.size, sample.size, System.currentTimeMillis(), healthy.take(maxHealthy), null)
+	}
+
+	/**
+	 * Direct candidate pass against one specific host (4.6.4 first choice
+	 * when a host first needs the pool). Pass = 2xx + not a challenge.
+	 */
+	suspend fun verifyForHostDirect(
+		baseClient: OkHttpClient,
+		candidates: List<ProxyEntry>,
+		host: String,
+		timeoutS: Int = DEFAULT_TIMEOUT_S,
+	): HealthReport = coroutineScope {
+		val sample = candidates.shuffled().take(HOST_VERIFY_CAP)
+		val probe = Request.Builder().url("https://$host/").get().build()
+		val healthy = probeAll(sample) { entry ->
+			// spec 4.6.4: a host-verify candidate passes ONLY on 200..299
+			// (unlike the generic liveness pass, which accepts 2xx/3xx)
+			probeDirect(baseClient, entry, probe, timeoutS, VERIFY_SUCCESS_RANGE)
+		}
+		Log.i(TAG, "verify host=$host: ${sample.size} sampled, ${healthy.size} passed (keep $MAX_PER_HOST_KEEP)")
+		HealthReport(candidates.size, sample.size, System.currentTimeMillis(), healthy.take(MAX_PER_HOST_KEEP), null)
+	}
+
+	/**
+	 * Chain pass over the generic test URL: each candidate becomes the MAIN
+	 * hop through [gateway], isolated per token (spec 4.6.2 steps d-e,
+	 * "chains are tested through the gateway").
+	 */
+	suspend fun checkChains(
+		relay: ProxyChainRelay,
+		baseClient: OkHttpClient,
+		gateway: ProxyChainRelay.GatewayBinding,
+		candidates: List<ProxyEntry>,
+		testUrl: String,
+		maxChains: Int,
+		timeoutS: Int = DEFAULT_CHAIN_TIMEOUT_S,
+	): HealthReport = coroutineScope {
+		if (!relay.isRunning) {
+			return@coroutineScope HealthReport(candidates.size, 0, 0L, emptyList(), "relay not running")
+		}
+		if (!testUrl.startsWith("https://")) {
+			return@coroutineScope HealthReport(candidates.size, 0, 0L, emptyList(), "testUrl is not https")
+		}
+		val sample = candidates.shuffled().take(CHAIN_SAMPLE_CAP)
+		val probe = Request.Builder().url(testUrl).head().build()
+		val healthy = probeAll(sample) { entry ->
+			probeChained(relay, baseClient, gateway, entry, probe, timeoutS, GENERIC_SUCCESS_RANGE)
+		}
+		Log.i(TAG, "chain health: ${sample.size} sampled, ${healthy.size} healthy (cap $maxChains)")
+		HealthReport(candidates.size, sample.size, System.currentTimeMillis(), healthy.take(maxChains), null)
+	}
+
+	/**
+	 * Chain pass against one specific host (4.6.4 second choice: when no
+	 * DIRECT candidate passes for that host, test the chains).
+	 */
+	suspend fun verifyChainsForHost(
+		relay: ProxyChainRelay,
+		baseClient: OkHttpClient,
+		gateway: ProxyChainRelay.GatewayBinding,
+		candidates: List<ProxyEntry>,
+		host: String,
+		timeoutS: Int = DEFAULT_CHAIN_TIMEOUT_S,
+	): HealthReport = coroutineScope {
+		if (!relay.isRunning) {
+			return@coroutineScope HealthReport(candidates.size, 0, 0L, emptyList(), "relay not running")
+		}
+		val sample = candidates.shuffled().take(HOST_VERIFY_CAP)
+		val probe = Request.Builder().url("https://$host/").get().build()
+		val healthy = probeAll(sample) { entry ->
+			probeChained(relay, baseClient, gateway, entry, probe, timeoutS, VERIFY_SUCCESS_RANGE)
+		}
+		Log.i(TAG, "verify-chains host=$host: ${sample.size} sampled, ${healthy.size} passed (keep $MAX_PER_HOST_KEEP)")
+		HealthReport(candidates.size, sample.size, System.currentTimeMillis(), healthy.take(MAX_PER_HOST_KEEP), null)
+	}
+
+	/**
+	 * Transition shim for the legacy controller (removed in 3/7): fetch the
+	 * lists on the legacy path, then run the direct pass.
+	 */
+	@Deprecated("legacy refresh path; superseded by the new controller in commit 3/7")
+	suspend fun refresh(
+		baseClient: OkHttpClient,
+		listUrls: List<String>,
+		testUrl: String,
+		maxHealthy: Int,
+	): Pair<ProxyListFetcher.Result, HealthReport> {
+		@Suppress("DEPRECATION")
+		val parsed = ProxyListFetcher.fetch(baseClient, listUrls)
+		val report = check(baseClient, parsed.entries, testUrl, maxHealthy)
+		return parsed to report
+	}
+
+	// endregion
+
+	// region probes
+
+	private val probeTokenSeq = AtomicInteger(0)
+
+	private suspend fun probeAll(
+		sample: List<ProxyEntry>,
+		probe: (ProxyEntry) -> HealthyProxy?,
+	): List<HealthyProxy> = coroutineScope {
+		val semaphore = Semaphore(PARALLELISM)
+		sample.map { entry ->
 			async(Dispatchers.IO) {
 				semaphore.acquire()
 				try {
-					probeOne(baseClient, entry, probe)
+					probe(entry)
 				} finally {
 					semaphore.release()
 				}
 			}
-		}.awaitAll()
-		val healthy = results.filterNotNull()
-			.sortedBy { it.latencyMs }
-			.take(maxHealthy)
-		Log.i(TAG, "health: ${candidates.size} candidates, ${sample.size} sampled, ${healthy.size} healthy (cap $maxHealthy)")
-		HealthReport(
-			candidatesTotal = candidates.size,
-			sampled = sample.size,
-			checkedAtMs = System.currentTimeMillis(),
-			healthy = healthy,
-			error = null,
-		)
+		}.awaitAll().filterNotNull().sortedBy { it.latencyMs }
 	}
 
 	/**
-	 * null = dead candidate. A pass needs: fast resolution to public space,
-	 * proxy handshake, full HTTPS round trip with real cert checks, success
-	 * status.
+	 * null = dead candidate. A direct pass needs: fast resolution to public
+	 * space, proxy handshake, full HTTPS round trip with real cert checks,
+	 * success status (and "not a challenge" on host-verify probes).
 	 */
-	private fun probeOne(baseClient: OkHttpClient, entry: ProxyEntry, probe: Request): HealthyProxy? {
+	private fun probeDirect(
+		baseClient: OkHttpClient,
+		entry: ProxyEntry,
+		probe: Request,
+		timeoutS: Int,
+		successRange: IntRange,
+	): HealthyProxy? {
 		try {
-			// hostname-level safety check: a list-provided HOSTNAME that resolves
-			// into private space is discarded here, where DNS has to happen anyway
+			// hostname-level safety check: a list-provided HOSTNAME that
+			// resolves into private space is discarded here, where DNS has to
+			// happen anyway (the fetcher rejects literals only)
 			val resolved = runCatching { InetAddress.getByName(entry.host) }.getOrNull()
 			if (resolved != null && (resolved.isLoopbackAddress || resolved.isLinkLocalAddress ||
 					resolved.isAnyLocalAddress || isPrivateInet(resolved))
@@ -135,9 +265,11 @@ object ProxyHealthChecker {
 			val type = when (entry.scheme) {
 				Scheme.HTTP -> Proxy.Type.HTTP
 				// SOCKS4 list entries are probed as SOCKS5 (the JDK picks the
-				// protocol version via a JVM-global hint we deliberately do NOT
-				// flip, because parallel probes would race on it). A SOCKS4-only
-				// entry fails the probe and is filtered - conservative by design
+				// protocol version via a JVM-global hint we deliberately do
+				// NOT flip, because parallel probes would race on it). A
+				// SOCKS4-only entry fails the probe and is filtered -
+				// conservative by design. Chain probes do not have this
+				// limitation: the relay speaks SOCKS4a natively.
 				Scheme.SOCKS4, Scheme.SOCKS5 -> Proxy.Type.SOCKS
 			}
 			val proxy = Proxy(type, InetSocketAddress.createUnresolved(entry.host, entry.port))
@@ -149,13 +281,16 @@ object ProxyHealthChecker {
 				.proxySelector(selector)
 				.proxyAuthenticator(Authenticator.NONE)
 				.cookieJar(CookieJar.NO_COOKIES)
-				.connectTimeout(SOCKET_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
-				.readTimeout(SOCKET_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
-				.callTimeout(CALL_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+				.connectTimeout(timeoutS.toLong(), TimeUnit.SECONDS)
+				.readTimeout(timeoutS.toLong(), TimeUnit.SECONDS)
+				.callTimeout((timeoutS * 2 + 1).toLong(), TimeUnit.SECONDS)
 				.build()
 			val started = System.currentTimeMillis()
 			transport.newCall(probe).execute().use { response ->
-				if (!response.isSuccessful) {
+				if (response.code !in successRange) {
+					return null
+				}
+				if (probe.method == "GET" && PoolChallengeDetector.isChallenge(response)) {
 					return null
 				}
 			}
@@ -165,21 +300,69 @@ object ProxyHealthChecker {
 		}
 	}
 
-	/**
-	 * One-pass refresh: parse lists (component 1), health-check the result.
-	 */
-	suspend fun refresh(
+	/** Chain probe: the candidate is the MAIN hop through [gateway], bound
+	 *  under its own token so parallel probes stay isolated (relay 2/7). */
+	private fun probeChained(
+		relay: ProxyChainRelay,
 		baseClient: OkHttpClient,
-		listUrls: List<String>,
-		testUrl: String,
-		maxHealthy: Int,
-	): Pair<ProxyListFetcher.Result, HealthReport> {
-		val parsed = ProxyListFetcher.fetch(baseClient, listUrls)
-		val report = check(baseClient, parsed.entries, testUrl, maxHealthy)
-		return parsed to report
+		gateway: ProxyChainRelay.GatewayBinding,
+		entry: ProxyEntry,
+		probe: Request,
+		timeoutS: Int,
+		successRange: IntRange,
+	): HealthyProxy? {
+		val token = "probe-${probeTokenSeq.incrementAndGet()}"
+		return try {
+			relay.bindChainToken(
+				token,
+				ProxyChainRelay.ChainBundle(
+					gateway = gateway,
+					main = ProxyChainRelay.Hop(entry.scheme, entry.host, entry.port),
+				),
+			)
+			val relayProxy = Proxy(
+				Proxy.Type.HTTP,
+				InetSocketAddress.createUnresolved("127.0.0.1", relay.port),
+			)
+			val selector = object : ProxySelector() {
+				override fun select(uri: URI?): List<Proxy> = listOf(relayProxy)
+				override fun connectFailed(uri: URI?, sa: SocketAddress?, ioe: java.io.IOException?) = Unit
+			}
+			val transport = baseClient.newBuilder()
+				.proxySelector(selector)
+				.proxyAuthenticator { _, response ->
+					// the only hook that may set CONNECT headers in OkHttp:
+					// relay secret + per-probe chain token (amendment 4/8)
+					response.request.newBuilder()
+						.header("Proxy-Authorization", relay.buildAuthHeader())
+						.header(ProxyChainRelay.HEADER_CHAIN_TOKEN, token)
+						.build()
+				}
+				.cookieJar(CookieJar.NO_COOKIES)
+				.connectTimeout(timeoutS.toLong(), TimeUnit.SECONDS)
+				.readTimeout(timeoutS.toLong(), TimeUnit.SECONDS)
+				.callTimeout((timeoutS * 3 + 1).toLong(), TimeUnit.SECONDS) // chain = 2 extra handshakes
+				.build()
+			val started = System.currentTimeMillis()
+			transport.newCall(probe).execute().use { response ->
+				if (response.code !in successRange) {
+					return null
+				}
+				if (probe.method == "GET" && PoolChallengeDetector.isChallenge(response)) {
+					return null
+				}
+			}
+			HealthyProxy(entry, System.currentTimeMillis() - started)
+		} catch (e: Exception) {
+			null
+		} finally {
+			relay.bindChainToken(token, null)
+		}
 	}
 
-	// region persistence
+	// endregion
+
+	// region persistence (trusted until a successful pass replaces it; no age gate)
 
 	suspend fun saveToCache(cacheDir: File, report: HealthReport) {
 		try {
@@ -199,8 +382,10 @@ object ProxyHealthChecker {
 	}
 
 	/**
-	 * Reads the cache file; null when absent, unreadable, wrong version, or
-	 * older than STATE_MAX_AGE_MS (entries expire unless re-checked, spec 5.2).
+	 * Reads the state file; null when absent, unreadable, or wrong version.
+	 * Event-driven rework: stored entries are trusted until a successful
+	 * pass replaces them - staleness is handled by RE-probing on the next
+	 * controller-triggered pass, never by wall-clock age.
 	 */
 	fun loadFromCache(cacheDir: File): List<HealthyProxy>? {
 		return try {
@@ -211,10 +396,6 @@ object ProxyHealthChecker {
 			val lines = file.readLines()
 			val head = lines.firstOrNull()?.split(' ') ?: return null
 			if (head.size < 2 || head[0].toIntOrNull() != STATE_VERSION) {
-				return null
-			}
-			val checkedAt = head[1].toLongOrNull() ?: return null
-			if (System.currentTimeMillis() - checkedAt > STATE_MAX_AGE_MS) {
 				return null
 			}
 			lines.drop(1).mapNotNull { line ->
