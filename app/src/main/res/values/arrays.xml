@@ -358,12 +358,14 @@
 		<item>Off</item>
 		<item>@string/pool_mode_fallback</item>
 		<item>@string/pool_mode_always</item>
+		<item>@string/pool_mode_chained</item>
 	</string-array>
 
 	<string-array name="values_proxy_pool_modes" translatable="false">
 		<item>OFF</item>
 		<item>FALLBACK</item>
 		<item>ALWAYS</item>
+		<item>CHAINED</item>
 	</string-array>
 
 </resources>

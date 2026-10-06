@@ -30,6 +30,11 @@
 		android:title="@string/pool_lists_title" />
 
 	<EditTextPreference
+		android:key="pool_mirrors"
+		android:summary="@string/pool_mirror_lists_summary"
+		android:title="@string/pool_mirror_lists_title" />
+
+	<EditTextPreference
 		android:key="pool_test_url"
 		android:summary="@string/pool_test_url_summary"
 		android:title="@string/pool_test_url_title"
@@ -41,8 +46,27 @@
 		app:useSimpleSummaryProvider="true" />
 
 	<EditTextPreference
+		android:key="pool_timeout_direct_s"
+		android:summary="@string/pool_timeout_direct_summary"
+		android:title="@string/pool_timeout_direct_title"
+		app:useSimpleSummaryProvider="true" />
+
+	<EditTextPreference
+		android:key="pool_timeout_chain_s"
+		android:summary="@string/pool_timeout_chain_summary"
+		android:title="@string/pool_timeout_chain_title"
+		app:useSimpleSummaryProvider="true" />
+
+	<EditTextPreference
 		android:key="pool_forbidden_hosts"
 		android:summary="@string/pool_forbidden_hosts_summary"
 		android:title="@string/pool_forbidden_hosts_title" />
+
+	<SwitchPreferenceCompat
+		android:defaultValue="false"
+		android:key="pool_insecure_certs"
+		android:summary="@string/pool_insecure_certs_summary"
+		android:title="@string/pool_insecure_certs_title"
+		app:allowDividerAbove="true" />
 
 </PreferenceScreen>

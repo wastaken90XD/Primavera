@@ -19,15 +19,20 @@ import org.wastaken.kotatsu.api21.core.util.ext.viewLifecycleScope
 import org.wastaken.kotatsu.api21.settings.utils.EditTextBindListener
 
 /**
- * Proxy pool (experimental) - component 5/5: the settings screen.
+ * Proxy pool (Task C 7/7): the settings screen.
  *
  * Carries the mandated disclosures in-app (pool_disclosure): proxy operators
- * see host names; inert while a static proxy is configured or while SSL
- * bypass is on (amendment 3); anonymous-traffic-only rule; the Rails
- * blind spot + pointer to the manual always-direct list (login-rule
- * amendment 3); wsrv.nl and video always stay off the pool.
- * The status row doubles as the "refresh now" action (tap), with a live
- * summary from ProxyPoolController.statusLine().
+ * see host names; the OFF<->any-mode switch applies after an app restart
+ * while Fallback/Always/Chained apply immediately (amendment 3); inert
+ * while a static proxy is configured under Fallback/Always (Chained is the
+ * exception - the static proxy is its gateway) or while SSL bypass is on;
+ * anonymous-traffic-only rule; the Rails blind spot + pointer to the manual
+ * always-direct list; wsrv.nl and video always stay off the pool.
+ *
+ * The status row doubles as the "refresh now" action (tap) and shows the
+ * 5/7 categories via ProxyPoolController.statusLine(): direct-pool healthy,
+ * relay chains, challenged hosts and the gateway state. The 6/7 opt-in
+ * "Ignore certificate errors on proxied requests" ends the list.
  */
 @AndroidEntryPoint
 class ProxyPoolSettingsFragment : BasePreferenceFragment(R.string.proxy_pool),
@@ -64,6 +69,31 @@ class ProxyPoolSettingsFragment : BasePreferenceFragment(R.string.proxy_pool),
 		)
 		@Suppress("UsePropertyAccessSyntax")
 		findPreference<EditTextPreference>(AppSettings.KEY_POOL_MAX_HEALTHY)?.setOnBindEditTextListener(
+			EditTextBindListener(
+				inputType = EditorInfo.TYPE_CLASS_NUMBER,
+				hint = null,
+				validator = null,
+			),
+		)
+		@Suppress("UsePropertyAccessSyntax")
+		findPreference<EditTextPreference>(AppSettings.KEY_POOL_MIRRORS)?.setOnBindEditTextListener(
+			EditTextBindListener(
+				inputType = EditorInfo.TYPE_CLASS_TEXT or EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE or
+					EditorInfo.TYPE_TEXT_VARIATION_URI,
+				hint = null,
+				validator = null,
+			),
+		)
+		@Suppress("UsePropertyAccessSyntax")
+		findPreference<EditTextPreference>(AppSettings.KEY_POOL_TIMEOUT_DIRECT_S)?.setOnBindEditTextListener(
+			EditTextBindListener(
+				inputType = EditorInfo.TYPE_CLASS_NUMBER,
+				hint = null,
+				validator = null,
+			),
+		)
+		@Suppress("UsePropertyAccessSyntax")
+		findPreference<EditTextPreference>(AppSettings.KEY_POOL_TIMEOUT_CHAIN_S)?.setOnBindEditTextListener(
 			EditTextBindListener(
 				inputType = EditorInfo.TYPE_CLASS_NUMBER,
 				hint = null,
@@ -112,9 +142,13 @@ class ProxyPoolSettingsFragment : BasePreferenceFragment(R.string.proxy_pool),
 	private fun updateModeDependencies() {
 		val enabled = settings.poolMode != PoolMode.OFF
 		findPreference<Preference>(AppSettings.KEY_POOL_LISTS)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_MIRRORS)?.isEnabled = enabled
 		findPreference<Preference>(AppSettings.KEY_POOL_TEST_URL)?.isEnabled = enabled
 		findPreference<Preference>(AppSettings.KEY_POOL_MAX_HEALTHY)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_TIMEOUT_DIRECT_S)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_TIMEOUT_CHAIN_S)?.isEnabled = enabled
 		findPreference<Preference>(AppSettings.KEY_POOL_FORBIDDEN_HOSTS)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_INSECURE_CERTS)?.isEnabled = enabled
 		findPreference<Preference>(KEY_STATUS)?.isEnabled = enabled
 	}
 
