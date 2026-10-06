@@ -111,7 +111,7 @@ class DetailsViewModel @Inject constructor(
 	fun routeBooruPost(manga: Manga, fallback: () -> Unit) {
 		viewModelScope.launch(Dispatchers.Main) {
 			val item = runCatching {
-				BooruMediaResolver.resolve(mangaRepositoryFactory, manga)
+				BooruMediaResolver.resolve(mangaRepositoryFactory, settings, manga)
 			}.getOrNull()
 			if (item != null) {
 				onBooruMediaRoute.call(item)

@@ -1070,6 +1070,7 @@
 	<string name="booru_long_press_action">Long-press action</string>
 	<string name="booru_video_engine">Video engine</string>
 	<string name="booru_hibernate_mode">Player hibernation</string>
+	<string name="booru_video_default_quality">Default video quality</string>
 	<string name="booru_hibernate_never">Never (recommended)</string>
 	<string name="booru_hibernate_30s">30 seconds after pausing in background</string>
 	<string name="booru_hibernate_2m">2 minutes after pausing in background</string>

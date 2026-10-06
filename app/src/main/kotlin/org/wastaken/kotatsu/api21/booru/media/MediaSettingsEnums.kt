@@ -39,3 +39,13 @@ enum class BooruHibernateMode(val delayMs: Long) {
 	TWO_MINUTES(120_000L),
 	TEN_MINUTES(600_000L),
 }
+
+/**
+ * Default video quality for parsers that expose one chapter per quality
+ * (best first). Rank rule over the chapter list, order DOES matter for
+ * the settings entries arrays (arrays.xml mirrors this order):
+ * HIGHEST = first chapter, BALANCED = second chapter if present else
+ * first (default), LOWEST = last chapter. A single-chapter post always
+ * plays its only chapter. Persisted by name like every enum above.
+ */
+enum class MediaVideoQuality { HIGHEST, BALANCED, LOWEST }

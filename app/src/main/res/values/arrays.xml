@@ -292,6 +292,12 @@
 		<item>libVLC</item>
 		<item>System (legacy)</item>
 	</string-array>
+
+	<string-array name="booru_video_quality_entries">
+		<item>Highest</item>
+		<item>Balanced</item>
+		<item>Lowest</item>
+	</string-array>
 	<string-array name="booru_hibernate_mode_entries">
 		<item>@string/booru_hibernate_never</item>
 		<item>@string/booru_hibernate_30s</item>

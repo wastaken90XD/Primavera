@@ -2,6 +2,7 @@ package org.wastaken.kotatsu.api21.booru.media
 
 import org.koitharu.kotatsu.parsers.model.Manga
 import org.wastaken.kotatsu.api21.core.parser.MangaRepository
+import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.reader.ui.media.looksLikeGif
 import org.wastaken.kotatsu.api21.reader.ui.media.looksLikeVideo
 import org.wastaken.kotatsu.api21.reader.ui.media.tagsIndicateGif
@@ -25,10 +26,22 @@ import org.wastaken.kotatsu.api21.reader.ui.media.urlFileName
  */
 object BooruMediaResolver {
 
-	suspend fun resolve(factory: MangaRepository.Factory, manga: Manga): BooruMediaItem? {
+	suspend fun resolve(
+		factory: MangaRepository.Factory,
+		settings: AppSettings,
+		manga: Manga,
+	): BooruMediaItem? {
 		val repository = factory.create(manga.source)
 		val details = if (manga.chapters.isNullOrEmpty()) repository.getDetails(manga) else manga
-		val chapter = details.chapters?.firstOrNull() ?: return null
+		val chapters = details.chapters ?: return null
+		if (chapters.isEmpty()) return null
+		// Default video quality (Task B): rank over the parser's own chapter
+		// order (best first) - the list itself is never reordered.
+		val chapter = when (settings.mediaVideoDefaultQuality) {
+			MediaVideoQuality.HIGHEST -> chapters.first()
+			MediaVideoQuality.LOWEST -> chapters.last()
+			MediaVideoQuality.BALANCED -> chapters.getOrNull(1) ?: chapters.first()
+		}
 		val pages = repository.getPages(chapter)
 		val page = pages.firstOrNull() ?: return null
 		val tagKeys = details.tags.map { it.key }

@@ -53,6 +53,12 @@
 			app:useSimpleSummaryProvider="true" />
 
 		<ListPreference
+			android:entries="@array/booru_video_quality_entries"
+			android:key="media_video_default_quality"
+			android:title="@string/booru_video_default_quality"
+			app:useSimpleSummaryProvider="true" />
+
+		<ListPreference
 			android:entries="@array/booru_hibernate_mode_entries"
 			android:key="booru_hibernate_mode"
 			android:title="@string/booru_hibernate_mode"

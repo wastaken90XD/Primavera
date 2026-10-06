@@ -202,7 +202,7 @@ class AppRouter private constructor(
 	private fun openBooruPostOrPlayer(context: Context, manga: Manga, fallback: () -> Unit) {
 		processLifecycleScope.launch(Dispatchers.Main) {
 			val item = runCatching {
-				BooruMediaResolver.resolve(entryPoint(context).mangaRepositoryFactory, manga)
+				BooruMediaResolver.resolve(entryPoint(context).mangaRepositoryFactory, entryPoint(context).settings, manga)
 			}.getOrNull()
 			if (item != null) {
 				BooruPlayerActivity.start(context, item)

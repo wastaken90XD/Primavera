@@ -30,6 +30,7 @@ import org.wastaken.kotatsu.api21.booru.media.BooruHibernateMode
 import org.wastaken.kotatsu.api21.booru.media.BooruVideoEngine
 import org.wastaken.kotatsu.api21.booru.media.DefaultPlayerMode
 import org.wastaken.kotatsu.api21.booru.media.FloatingWindowPosition
+import org.wastaken.kotatsu.api21.booru.media.MediaVideoQuality
 import org.wastaken.kotatsu.api21.booru.media.FloatingWindowSize
 import org.wastaken.kotatsu.api21.booru.media.GifTapAction
 import org.wastaken.kotatsu.api21.booru.media.RepeatMode
@@ -76,6 +77,7 @@ class MediaPlayerSettingsFragment : BasePreferenceFragment(R.string.media_player
 		addPreferencesFromResource(R.xml.pref_media_player)
 		bindEnumList(AppSettings.KEY_BOORU_LONG_PRESS_ACTION, BooruLongPressAction.entries)
 		bindEnumList(AppSettings.KEY_BOORU_VIDEO_ENGINE, BooruVideoEngine.entries)
+		bindEnumList(AppSettings.KEY_MEDIA_VIDEO_DEFAULT_QUALITY, MediaVideoQuality.entries)
 		bindEnumList(AppSettings.KEY_BOORU_HIBERNATE_MODE, BooruHibernateMode.entries)
 		bindEnumList(AppSettings.KEY_MEDIA_GIF_TAP_ACTION, GifTapAction.entries)
 		bindEnumList(AppSettings.KEY_MEDIA_VIDEO_TAP_ACTION, VideoTapAction.entries)

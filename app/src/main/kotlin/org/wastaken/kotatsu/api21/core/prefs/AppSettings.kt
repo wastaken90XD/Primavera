@@ -38,6 +38,7 @@ import org.wastaken.kotatsu.api21.booru.media.DefaultPlayerMode
 import org.wastaken.kotatsu.api21.booru.media.FloatingWindowPosition
 import org.wastaken.kotatsu.api21.booru.media.FloatingWindowSize
 import org.wastaken.kotatsu.api21.booru.media.GifTapAction
+import org.wastaken.kotatsu.api21.booru.media.MediaVideoQuality
 import org.koitharu.kotatsu.parsers.model.MangaSource
 import org.wastaken.kotatsu.api21.reader.ui.media.mediaPlayerDefault
 import org.wastaken.kotatsu.api21.booru.media.RepeatMode
@@ -133,6 +134,10 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 
 	val mediaVideoTapAction: VideoTapAction
 		get() = prefs.getEnumValue(KEY_MEDIA_VIDEO_TAP_ACTION, VideoTapAction.PLAY_IN_APP)
+
+	/** Default video quality for multi-quality videos (rank over the parser's chapter order). */
+	val mediaVideoDefaultQuality: MediaVideoQuality
+		get() = prefs.getEnumValue(KEY_MEDIA_VIDEO_DEFAULT_QUALITY, MediaVideoQuality.BALANCED)
 
 	val mediaDefaultPlayerMode: DefaultPlayerMode
 		get() = prefs.getEnumValue(KEY_MEDIA_DEFAULT_PLAYER_MODE, DefaultPlayerMode.FULLSCREEN)
@@ -890,6 +895,7 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_MEDIA_BLUR_INTENSITY = "media_blur_intensity"
 		const val KEY_MEDIA_GIF_TAP_ACTION = "media_gif_tap_action"
 		const val KEY_MEDIA_VIDEO_TAP_ACTION = "media_video_tap_action"
+		const val KEY_MEDIA_VIDEO_DEFAULT_QUALITY = "media_video_default_quality"
 		const val KEY_MEDIA_DEFAULT_PLAYER_MODE = "media_default_player_mode"
 		const val KEY_MEDIA_GIF_LOOP = "media_gif_loop"
 		const val KEY_MEDIA_GIF_FRAME_CONTROLS = "media_gif_frame_controls"

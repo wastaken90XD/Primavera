@@ -95,7 +95,7 @@ open class RemoteListViewModel @Inject constructor(
 			return
 		}
 		launchLoadingJob(Dispatchers.Main) {
-			val item = runCatching { BooruMediaResolver.resolve(mangaRepositoryFactory, manga) }.getOrNull()
+			val item = runCatching { BooruMediaResolver.resolve(mangaRepositoryFactory, settings, manga) }.getOrNull()
 			if (item != null) {
 				onBooruMediaRoute.call(item)
 			} else {
@@ -107,7 +107,7 @@ open class RemoteListViewModel @Inject constructor(
 	/** Adds the post to the media queue without starting playback. */
 	fun enqueueBooruPost(manga: Manga) {
 		launchLoadingJob(Dispatchers.Main) {
-			val item = runCatching { BooruMediaResolver.resolve(mangaRepositoryFactory, manga) }.getOrNull()
+			val item = runCatching { BooruMediaResolver.resolve(mangaRepositoryFactory, settings, manga) }.getOrNull()
 			if (item != null) {
 				onBooruMediaQueued.call(item)
 			} else {
@@ -126,7 +126,7 @@ open class RemoteListViewModel @Inject constructor(
 	fun beginInlineGifLoad(manga: Manga) {
 		launchLoadingJob(Dispatchers.Default) {
 			val pair = runCatching {
-				val item = BooruMediaResolver.resolve(mangaRepositoryFactory, manga)
+				val item = BooruMediaResolver.resolve(mangaRepositoryFactory, settings, manga)
 				item?.takeIf { it.mediaType == BooruMediaType.GIF }?.let { manga.id to it.url }
 			}.getOrNull()
 			if (pair != null) {
