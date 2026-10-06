@@ -7,6 +7,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.internal.connection.RealCall
+import org.wastaken.kotatsu.api21.core.exceptions.CloudFlareException
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import java.io.IOException
 
@@ -73,6 +74,13 @@ class PoolRoutingInterceptor(
 						ProxyPoolController.reportOutcome(host, route, null)
 						return response
 					} catch (e: IOException) {
+						if (e is CloudFlareException) {
+							// the tier chain's CloudFlareInterceptor escalated
+							// a challenge; the solver path owns this, never a
+							// route failure (CloudFlareException IS an
+							// IOException, so this guard must run first)
+							throw e
+						}
 						ProxyPoolController.reportOutcome(host, route, e)
 						lastError = e
 						if (!retryable) {
@@ -88,6 +96,15 @@ class PoolRoutingInterceptor(
 							// origin answered through the proxy: keep the
 							// answer, never rotate (spec 5.6)
 							return response
+						}
+						if (PoolChallengeDetector.isChallenge(response)) {
+							// 4/7: a challenge page arrived through the pool
+							// (header-first, capped-peek helper fallback; the
+							// response was never consumed). A challenged
+							// exit rotates to the next route...
+							response.close()
+							ProxyPoolController.reportChallenge(host, route)
+							continue
 						}
 						ProxyPoolController.reportOutcome(host, route, null)
 						return response

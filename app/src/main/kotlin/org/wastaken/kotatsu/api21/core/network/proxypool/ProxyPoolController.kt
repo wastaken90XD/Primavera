@@ -9,10 +9,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import okhttp3.Authenticator
 import okhttp3.Cookie
-import okhttp3.CookieJar
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import org.wastaken.kotatsu.api21.core.network.CloudFlareInterceptor
+import org.wastaken.kotatsu.api21.core.network.cookies.CloudflareFilteringCookieJar
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyHealthChecker.HealthyProxy
 import org.wastaken.kotatsu.api21.core.network.proxy.ProxyType
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
@@ -183,6 +183,13 @@ object ProxyPoolController {
 
 	private val hostStates = ConcurrentHashMap<String, HostRouteState>()
 	private val droppedProxyKeys = ConcurrentHashMap.newKeySet<String>()
+
+	/** Hosts that answered a Cloudflare challenge through a pooled route
+	 *  (4/7). Event-set: observing a challenge adds the host; a successful
+	 *  direct 2xx (e.g. after a solver pass) is the clearing event. The
+	 *  FALLBACK plan orders pool-first for challenged hosts: the challenge
+	 *  is per-IP, so another exit is the remedy the pool provides. */
+	private val challengedHosts = ConcurrentHashMap.newKeySet<String>()
 	private val proxyFailStreak = ConcurrentHashMap<String, Int>()
 	private val lastEvalLog = ConcurrentHashMap<String, String>()
 	private val rotation = AtomicInteger(0)
@@ -278,7 +285,8 @@ object ProxyPoolController {
 		return when (mode) {
 			PoolMode.OFF -> DIRECT_PLAN
 			PoolMode.FALLBACK ->
-				if (stateOf(host).poolFirst) {
+				if (stateOf(host).poolFirst || host in challengedHosts) {
+					// learned reset OR observed challenge: pool goes first
 					pool + RoutePlan.Direct
 				} else {
 					listOf(RoutePlan.Direct) + pool
@@ -400,16 +408,12 @@ object ProxyPoolController {
 	/**
 	 * Cloudflare-managed cookies (amendment 5 name set): exact cf_clearance
 	 * and __cf_bm, contains cfuvid, prefixes cf_chl / cf_ / _cf. NEVER
-	 * matches csrftoken / XSRF-TOKEN / anything not CF-owned. The 4/7
-	 * filtering jar ships the storage integration + the non-overwrite
-	 * proof; the pooled clients already filter with this exact matcher.
+	 * matches csrftoken / XSRF-TOKEN / anything not CF-owned. Single source
+	 * of truth: CloudflareFilteringCookieJar (4/7), where the load/save
+	 * filtering and the non-overwrite proof live.
 	 */
 	fun isCloudflareCookie(nameLower: String): Boolean =
-		nameLower == "cf_clearance" || nameLower == "__cf_bm" ||
-			nameLower.contains("cfuvid") ||
-			nameLower.startsWith("cf_chl") ||
-			nameLower.startsWith("cf_") ||
-			nameLower.startsWith("_cf")
+		CloudflareFilteringCookieJar.matches(nameLower)
 
 	fun proxyKeyOf(entry: ProxyListFetcher.ProxyEntry): String = "host=${entry.host} port=${entry.port}"
 
@@ -439,6 +443,7 @@ object ProxyPoolController {
 		when (route) {
 			RoutePlan.Direct -> {
 				if (failure == null) {
+					challengedHosts.remove(host) // direct 2xx clears the challenge mark
 					val st = hostStates[host] ?: return
 					if (st.poolFirst) {
 						st.poolFirst = false
@@ -528,6 +533,26 @@ object ProxyPoolController {
 
 	private fun remainingHealthy(): Int =
 		status.healthy.count { proxyKeyOf(it.entry) !in droppedProxyKeys }
+
+	/**
+	 * A pooled route answered with a Cloudflare challenge (4/7, detected by
+	 * PoolChallengeDetector - header first, capped-body helper fallback).
+	 * The host is marked challenged (pool-first ordering; the bootstrap in
+	 * 5/7 additionally elevates it into chain construction), and the
+	 * offending proxy is skipped FOR THIS HOST only: it answered well at
+	 * transport level, the exit IP is what got challenged.
+	 */
+	fun reportChallenge(host: String, route: RoutePlan.ViaProxy) {
+		val key = proxyKeyOf(route.proxy.entry)
+		val st = stateOf(host)
+		synchronized(st) { st.failedKeys += key }
+		if (challengedHosts.add(host)) {
+			Log.i(TAG, "host=$host answered a Cloudflare challenge via pool route: marked challenged")
+		}
+		ensureVerifiedAsync(host)
+	}
+
+	fun isChallenged(host: String): Boolean = host in challengedHosts
 
 	/** Connection-level classification used by interceptor + controller. */
 	fun classifyFailure(t: Throwable?): FailureClass {
@@ -676,7 +701,7 @@ object ProxyPoolController {
 			val client = tier.newBuilder()
 				.proxySelector(selector)
 				.proxyAuthenticator(Authenticator.NONE)
-				.cookieJar(PoolCookieWrapper(tier.cookieJar))
+				.cookieJar(CloudflareFilteringCookieJar(tier.cookieJar))
 				.apply {
 					interceptors().removeAll {
 						it is PoolRoutingInterceptor || it is CloudFlareInterceptor
@@ -686,30 +711,6 @@ object ProxyPoolController {
 			pooledClients[key] = client
 			return client
 		}
-	}
-
-	/**
-	 * Pooled-route cookie behavior (amendment 5 name set, from day one of
-	 * the new model): CF-managed cookies are NEVER sent through pool
-	 * proxies (the proxy would impersonate the cleared IP) and NEVER saved
-	 * from pooled responses (a proxied response can never overwrite a CF
-	 * cookie the DIRECT path minted). Every non-CF cookie passes both ways
-	 * - sessions (PHPSESSID etc.) keep working through the pool. The 4/7
-	 * filtering-jar commit formalizes the storage side and the proof.
-	 */
-	class PoolCookieWrapper(
-		private val delegate: CookieJar,
-	) : CookieJar {
-		override fun saveFromResponse(url: okhttp3.HttpUrl, cookies: List<Cookie>) {
-			delegate.saveFromResponse(
-				url,
-				cookies.filterNot { isCloudflareCookie(it.name.lowercase()) },
-			)
-		}
-
-		override fun loadForRequest(url: okhttp3.HttpUrl): List<Cookie> =
-			delegate.loadForRequest(url)
-				.filterNot { isCloudflareCookie(it.name.lowercase()) }
 	}
 
 	private val DIRECT_PLAN = listOf(RoutePlan.Direct)
