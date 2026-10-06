@@ -379,6 +379,25 @@ object ProxyPoolController {
 	}
 
 	/**
+	 * Never routed through the pool, no matter the mode: the wsrv.nl image
+	 * proxy and the user's Cloudflare-worker relay (spec: the pool must never
+	 * touch the wsrv.nl image-proxy path). Semantics unchanged from the old
+	 * controller (missed in the first 3/7 write; CI caught it).
+	 */
+	fun isHardExcluded(host: String, settings: AppSettings): Boolean {
+		if (host == "wsrv.nl" || host.endsWith(".wsrv.nl")) {
+			return true
+		}
+		if (settings.wsrvWorkerEnabled) {
+			val workerHost = runCatching { settings.wsrvWorkerUrl.toHttpUrlOrNull()?.host }.getOrNull()
+			if (workerHost != null && workerHost.equals(host, ignoreCase = true)) {
+				return true
+			}
+		}
+		return false
+	}
+
+	/**
 	 * Cloudflare-managed cookies (amendment 5 name set): exact cf_clearance
 	 * and __cf_bm, contains cfuvid, prefixes cf_chl / cf_ / _cf. NEVER
 	 * matches csrftoken / XSRF-TOKEN / anything not CF-owned. The 4/7
