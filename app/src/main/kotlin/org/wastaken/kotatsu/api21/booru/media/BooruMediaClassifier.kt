@@ -1,6 +1,7 @@
 package org.wastaken.kotatsu.api21.booru.media
 
 import org.koitharu.kotatsu.parsers.model.Manga
+import org.wastaken.kotatsu.api21.reader.ui.media.urlPathOnly
 
 /**
  * Pure, network-free classification of a booru grid tile:
@@ -31,9 +32,11 @@ object BooruMediaClassifier {
 		return classify(manga.publicUrl.ifEmpty { manga.url }, manga.tags.map { it.title })
 	}
 
+	// Delegates to the ONE shared URL-path extraction (Task A): trailing
+	// slash trimmed, query/fragment stripped, lowercase. This class no
+	// longer keeps its own copy.
 	private fun String?.fileExtension(): String {
 		this ?: return ""
-		val clean = substringBefore('#').substringBefore('?')
-		return clean.substringAfterLast('.', "").lowercase().takeIf { it.length in 2..4 } ?: ""
+		return urlPathOnly().substringAfterLast('.', "").lowercase().takeIf { it.length in 2..4 } ?: ""
 	}
 }

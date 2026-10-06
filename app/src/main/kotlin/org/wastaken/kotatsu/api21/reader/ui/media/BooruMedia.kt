@@ -14,7 +14,10 @@ import org.wastaken.kotatsu.api21.reader.ui.pager.ReaderPage
  * animations or video files instead of still images.
  */
 
-private val VIDEO_EXTENSIONS = setOf("mp4", "webm", "gifv")
+// The single shared decide-video-on-URL set (Task A spec): path-only,
+// extension case-insensitive. gifv stays as the legacy alias for
+// Reddit-style .gifv posts (they serve mp4/webm content).
+private val VIDEO_EXTENSIONS = setOf("mp4", "webm", "m4v", "mkv", "mov", "gifv")
 private const val GIF_EXTENSION = "gif"
 
 // booru tag slugs that mark animated/video posts when the file URL carries
@@ -22,8 +25,19 @@ private const val GIF_EXTENSION = "gif"
 private val VIDEO_TAGS = setOf("video", "webm", "mp4", "gifv", "animated_gif", "flash")
 private val GIF_TAGS = setOf("gif", "animated", "animated_gif")
 
+/**
+ * The URL's path-only portion: query and fragment stripped, trailing
+ * slashes trimmed. Signed CDN file URLs of the form
+ * "https://host/get_file/.../id_1080p.mp4/?v-acctoken=..." (Rule34Video /
+ * KVS family) carry the extension before a trailing slash, so without the
+ * trim every video-ish check below failed and THE PLAYER NEVER LAUNCHED.
+ */
+internal fun String.urlPathOnly(): String {
+	return substringBefore('#').substringBefore('?').trimEnd('/')
+}
+
 internal fun String.urlExtension(): String {
-	return substringBefore('#').substringBefore('?').substringAfterLast('.', "").lowercase()
+	return urlPathOnly().substringAfterLast('.', "").lowercase()
 }
 
 /** Secondary signal: explicit format hints carried in the query ("?ext=", "?format="). */
@@ -86,7 +100,7 @@ internal data class StreamVariant(
 
 /** Display name of the file a page URL points at ("abc123.mp4"), without query/fragment. */
 internal fun String.urlFileName(): String {
-	return substringBefore('#').substringBefore('?').substringAfterLast('/')
+	return urlPathOnly().substringAfterLast('/')
 }
 
 /**
