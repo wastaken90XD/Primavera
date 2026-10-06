@@ -102,8 +102,11 @@ interface NetworkModule {
 			}
 		}.build().also { client ->
 			// Controller attach: pins the build-time pool mode (amendment 3)
-			// and loads the saved health state. Cheap, off-thread.
-			ProxyPoolController.attach(contextProvider.get(), settings, client)
+			// and loads the saved health state. Cheap, off-thread. 5/7: the
+			// provider rides along (read-only) so the bootstrap can fetch
+			// lists through the static-proxy gateway and CHAINED can bind
+			// it as the relay gateway.
+			ProxyPoolController.attach(contextProvider.get(), settings, client, proxyProvider)
 		}
 
 		@Provides

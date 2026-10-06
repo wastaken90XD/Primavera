@@ -14,11 +14,13 @@ import okhttp3.OkHttpClient
 import org.wastaken.kotatsu.api21.core.network.CloudFlareInterceptor
 import org.wastaken.kotatsu.api21.core.network.cookies.CloudflareFilteringCookieJar
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyHealthChecker.HealthyProxy
+import org.wastaken.kotatsu.api21.core.network.proxy.ProxyProvider
 import org.wastaken.kotatsu.api21.core.network.proxy.ProxyType
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.core.util.ext.printStackTraceDebug
 import java.io.IOException
 import java.lang.ref.WeakReference
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ProxySelector
@@ -42,6 +44,15 @@ enum class PoolMode {
 
 	/** Pool proxies are tried first; direct is only the fail-open tail. */
 	ALWAYS,
+
+	/**
+	 * 5/7 chaining mode: every eligible host goes through the gateway (the
+	 * user's STATIC proxy - Tor is the canonical case) plus one pool proxy
+	 * as the second hop, built by the loopback relay. Requires a static
+	 * proxy of a chain-capable type (HTTP / SOCKS4 / SOCKS5); the direct
+	 * fail-open tail is kept and logged, never silent.
+	 */
+	CHAINED,
 }
 
 const val POOL_DEFAULT_MAX_HEALTHY = 20
@@ -126,10 +137,13 @@ object ProxyPoolController {
 	private const val PHPBB_PREFIX = "phpbb3_"
 
 	/** One attempt of a request plan. Direct runs on the calling chain;
-	 *  ViaProxy runs through the pooled client pinned to the entry. */
+	 *  ViaProxy/ViaChain run through pooled clients pinned to the route. */
 	sealed interface RoutePlan {
 		data object Direct : RoutePlan
 		data class ViaProxy(val proxy: HealthyProxy) : RoutePlan
+
+		/** 5/7: the relay-token-bound chain (gateway + this main proxy). */
+		data class ViaChain(val proxy: HealthyProxy, val token: String) : RoutePlan
 	}
 
 	/** Verdict for one host on one pool evaluation. */
@@ -142,11 +156,16 @@ object ProxyPoolController {
 		val cookieCount: Int,
 	)
 
-	/** Snapshot consumed by the settings status line. */
+	/** Snapshot consumed by the settings status line (5/7 categories:
+	 *  direct-pool healthy, relay chains built, challenged hosts, gateway
+	 *  state - defaults keep the legacy screen compiling until 7/7). */
 	data class Status(
 		val healthy: List<HealthyProxy>,
 		val refreshing: Boolean,
 		val lastSummary: String,
+		val chainsCount: Int = 0,
+		val challengedCount: Int = 0,
+		val gatewayLabel: String = "",
 	)
 
 	/** Event-only per-host routing memory (no timestamps anywhere). */
@@ -154,6 +173,10 @@ object ProxyPoolController {
 		@Volatile var poolFirst: Boolean = false
 
 		@Volatile var verified: List<HealthyProxy> = emptyList()
+
+		/** 5/7: chains verified FOR THIS HOST (4.6.4 second choice), each
+		 *  already token-bound at the relay when stored. */
+		@Volatile var verifiedChains: List<HealthyProxy> = emptyList()
 
 		@Volatile var verifying: Boolean = false
 		val failedKeys = HashSet<String>() // all access under synchronized(this)
@@ -167,6 +190,31 @@ object ProxyPoolController {
 
 	@Volatile
 	private var baseClientRef: WeakReference<OkHttpClient>? = null
+
+	/** Static-proxy provider, read-only (its authenticator powers the
+	 *  bootstrap's gateway-transport list fetch; ProxyProvider itself is
+	 *  untouched). */
+	@Volatile
+	private var proxyProviderRef: WeakReference<ProxyProvider>? = null
+
+	// region chains / relay (5/7)
+
+	@Volatile
+	private var relay: ProxyChainRelay? = null
+
+	@Volatile
+	private var gateway: ProxyChainRelay.GatewayBinding? = null
+
+	@Volatile
+	private var chainHealthy: List<HealthyProxy> = emptyList()
+
+	/** entry key -> relay token; bindings are re-issued on every chain set
+	 *  change and for every per-host verified chain. */
+	private val chainTokens = ConcurrentHashMap<String, String>()
+	private val relayLock = Any()
+	private val relayTokenSeq = AtomicInteger(1)
+
+	// endregion
 
 	/** The mode the pool was BUILT with (amendment 3: Off<->any-mode shows a
 	 *  "takes effect after an app restart" sentence on the settings screen,
@@ -212,10 +260,16 @@ object ProxyPoolController {
 	 * disk state available immediately - it is trusted until the next
 	 * successful pass replaces it (event driven, 4.4).
 	 */
-	fun attach(context: Context, settings: AppSettings, baseClient: OkHttpClient) {
+	fun attach(
+		context: Context,
+		settings: AppSettings,
+		baseClient: OkHttpClient,
+		proxyProvider: ProxyProvider,
+	) {
 		contextRef = WeakReference(context.applicationContext)
 		settingsRef = settings
 		baseClientRef = WeakReference(baseClient)
+		proxyProviderRef = WeakReference(proxyProvider)
 		modeSnapshot = settings.poolMode
 		scope.launch {
 			val cached = ProxyHealthChecker.loadFromCache(context.applicationContext.cacheDir)
@@ -241,12 +295,17 @@ object ProxyPoolController {
 	 * Amendment 1+3: the pool is INERT while the user has a static proxy
 	 * configured (proxyType != DIRECT) or SSL bypass is enabled. Both read
 	 * live on purpose: flipping them kills pooling immediately rather than
-	 * silently mixing models for one host.
+	 * silently mixing models for one host. 5/7: CHAINED is the exception -
+	 * its gateway IS the static proxy (Tor is the canonical example), so a
+	 * chain-capable static proxy keeps the pool ACTIVE under CHAINED.
 	 */
 	fun isInert(): Boolean {
 		val s = settingsRef ?: return true
-		if (s.proxyType != ProxyType.DIRECT || s.isSSLBypassEnabled) {
+		if (s.isSSLBypassEnabled) {
 			return true
+		}
+		if (s.proxyType != ProxyType.DIRECT) {
+			return effectiveMode() != PoolMode.CHAINED
 		}
 		return false
 	}
@@ -278,7 +337,7 @@ object ProxyPoolController {
 		}
 		// a pool that is asked for a route it does not have is the EVENT
 		// that launches candidate gathering (4.4: on demand, no age gate)
-		if (status.healthy.isEmpty() && !status.refreshing) {
+		if (status.healthy.isEmpty() && chainHealthy.isEmpty() && !status.refreshing) {
 			refreshAsync(force = false)
 		}
 		val pool = poolRoutesFor(host)
@@ -299,14 +358,61 @@ object ProxyPoolController {
 				} else {
 					pool + RoutePlan.Direct
 				}
+
+			PoolMode.CHAINED -> {
+				val gw = gateway
+				if (gw == null) {
+					// throttled once-per-host warning: CHAINED needs the static gateway
+					if (lastEvalLog.put("chain-none:$host", "w") == null) {
+						Log.w(TAG, "CHAINED without a chain-capable static gateway for host=$host: direct plan")
+					}
+					DIRECT_PLAN
+				} else {
+					val chains = chainRoutesFor(host)
+					if (chains.isEmpty()) {
+						Log.w(TAG, "CHAINED with no healthy chains for host=$host: direct fail-open tail only")
+					}
+					chains + RoutePlan.Direct
+				}
+			}
 		}
 	}
 
-	/** Verified-for-this-host proxies first (minus failed/dropped), then the
-	 *  global healthy set, small O(1) rotation. */
-	private fun poolRoutesFor(host: String): List<RoutePlan.ViaProxy> {
+	/** Chains planned for one host: per-host verified chains first, then
+	 *  the global chain-healthy set (pre-5/7 challenge-elevation rule), all
+	 *  rotated, all with relay tokens already bound at bind-time. */
+	private fun chainRoutesFor(host: String): List<RoutePlan.ViaChain> {
 		val st = stateOf(host)
-		val out = ArrayList<RoutePlan.ViaProxy>(POOL_PLAN_CAP)
+		val out = ArrayList<RoutePlan.ViaChain>(POOL_PLAN_CAP)
+		synchronized(st) {
+			for (h in st.verifiedChains) {
+				if (out.size >= POOL_PLAN_CAP) break
+				val key = proxyKeyOf(h.entry)
+				if (key !in st.failedKeys && key !in droppedProxyKeys) {
+					chainTokens[key]?.let { out += RoutePlan.ViaChain(h, it) }
+				}
+			}
+		}
+		val global = chainHealthy
+		if (out.isEmpty() && global.isNotEmpty()) {
+			val n = minOf(POOL_PLAN_CAP, global.size)
+			val start = if (global.size <= 1) 0 else rotation.getAndIncrement() % global.size
+			for (i in 0 until n) {
+				val h = global[(start + i) % global.size]
+				val key = proxyKeyOf(h.entry)
+				if (key in droppedProxyKeys) continue
+				chainTokens[key]?.let { out += RoutePlan.ViaChain(h, it) }
+			}
+		}
+		return out
+	}
+
+	/** Verified-for-this-host proxies first (minus failed/dropped), then the
+	 *  global healthy set, small O(1) rotation. Challenged hosts additionally
+	 *  get the chain-healthy routes appended as the second choice (4.6.4). */
+	private fun poolRoutesFor(host: String): List<RoutePlan> {
+		val st = stateOf(host)
+		val out = ArrayList<RoutePlan>(POOL_PLAN_CAP)
 		synchronized(st) {
 			for (h in st.verified) {
 				if (out.size >= POOL_PLAN_CAP) break
@@ -327,6 +433,15 @@ object ProxyPoolController {
 				if (key in failed || key in droppedProxyKeys) continue
 				if (out.any { proxyKeyOf(it.proxy.entry) == key }) continue
 				out += RoutePlan.ViaProxy(h)
+			}
+		}
+		// challenge-elevated second choice (4/7 mark): for challenged hosts the
+		// chains are appended AFTER the direct-pool routes as the deeper option
+		if (host in challengedHosts) {
+			for (c in chainRoutesFor(host)) {
+				if (out.size >= POOL_PLAN_CAP) break
+				if (out.any { proxyKeyOf(it.proxy.entry) == proxyKeyOf(c.proxy.entry) }) continue
+				out += c
 			}
 		}
 		return out
@@ -459,18 +574,30 @@ object ProxyPoolController {
 				}
 			}
 
-			is RoutePlan.ViaProxy -> {
-				val key = proxyKeyOf(route.proxy.entry)
+			is RoutePlan.ViaProxy, is RoutePlan.ViaChain -> {
+				val key = proxyKeyOf(routeProxy(route).entry)
 				if (failure == null) {
 					proxyFailStreak.remove(key)
 					stateOf(host).poolFirst = true
 				} else {
+					if (route is RoutePlan.ViaChain && relay?.isRunning != true) {
+						// relay died between attempt and report: rebuild it
+						// (bind-time rebind) and take NO ledger mark - the
+						// proxy is not at fault for our own lifecycle
+						val gwNow = gateway
+						val r = gwNow?.let { ensureRelay() }
+						if (r != null && gwNow != null) {
+							rebindChainSet(r, gwNow, chainHealthy)
+						}
+						Log.i(TAG, "chain attempt outcome ignored: relay was not running (restarted=${r != null})")
+						return
+					}
 					val cls = classifyFailure(failure)
 					val st = stateOf(host)
 					synchronized(st) { st.failedKeys += key }
 					val streak = (proxyFailStreak[key] ?: 0) + 1
 					proxyFailStreak[key] = streak
-					Log.i(TAG, "host=$host pool attempt failed ($cls) streak=$streak")
+					Log.i(TAG, "host=$host ${route.label()} failed ($cls) streak=$streak")
 					if (cls == FailureClass.TLS || streak >= PROXY_FAIL_DROP_STREAK) {
 						// event-driven replacement for the old 24h ban: the
 						// proxy leaves the plans until a successful pass
@@ -485,13 +612,134 @@ object ProxyPoolController {
 						}
 					}
 					ensureVerifiedAsync(host)
-					if (remainingHealthy() == 0 && !status.refreshing) {
+					if (remainingHealthy() == 0 && chainHealthy.isEmpty() && !status.refreshing) {
 						// exhaustion event => one refresh pass (4.4)
 						refreshAsync(force = false)
 					}
 				}
 			}
 		}
+	}
+
+	private fun routeProxy(route: RoutePlan): HealthyProxy = when (route) {
+		is RoutePlan.ViaProxy -> route.proxy
+		is RoutePlan.ViaChain -> route.proxy
+		RoutePlan.Direct -> throw IllegalArgumentException("direct route has no proxy")
+	}
+
+	// region relay / gateway plumbing (5/7)
+
+	/**
+	 * The chain gateway from the CURRENT settings: the user's static proxy,
+	 * when its type can act as a relay hop (HTTP / SOCKS4 / SOCKS5). HTTPS
+	 * and MTPROTO static proxies cannot chain - the relay speaks plain
+	 * CONNECT to its gateway - and are deliberately NOT coerced. Host-only
+	 * logging; credentials ride the binding, never the log.
+	 */
+	private fun resolveChainGateway(s: AppSettings): ProxyChainRelay.GatewayBinding? {
+		val scheme = when (s.proxyType) {
+			ProxyType.HTTP -> ProxyListFetcher.Scheme.HTTP
+			ProxyType.SOCKS4 -> ProxyListFetcher.Scheme.SOCKS4
+			ProxyType.SOCKS5 -> ProxyListFetcher.Scheme.SOCKS5
+			ProxyType.DIRECT -> return null
+			else -> {
+				Log.w(TAG, "static proxy type ${s.proxyType} is not chain-capable (no gateway binding)")
+				return null
+			}
+		}
+		val host = s.proxyAddress?.trim()?.takeUnless { it.isEmpty() } ?: return null
+		val port = s.proxyPort.takeIf { it in 1..65535 } ?: return null
+		return ProxyChainRelay.GatewayBinding(
+			hop = ProxyChainRelay.Hop(scheme, host, port),
+			username = s.proxyLogin,
+			password = s.proxyPassword,
+			sourceLabel = "static",
+		)
+	}
+
+	private fun ensureRelay(): ProxyChainRelay? = synchronized(relayLock) {
+		relay?.takeIf { it.isRunning } ?: ProxyChainRelay().also {
+			it.start()
+			relay = it
+			Log.i(TAG, "relay started for chain bootstrap on port ${it.port}")
+		}
+	}
+
+	/** Event-driven stop: chains dead AND the engine doesn't depend on them
+	 *  (mode != CHAINED) => the relay's worker threads are freed. */
+	private fun maybeStopRelay() {
+		if (effectiveMode() == PoolMode.CHAINED) {
+			return
+		}
+		if (chainHealthy.isNotEmpty()) {
+			return
+		}
+		synchronized(relayLock) {
+			relay?.takeIf { chainHealthy.isEmpty() }?.let {
+				it.stop()
+				relay = null
+				synchronized(chainTokens) { chainTokens.clear() }
+				Log.i(TAG, "relay stopped: no chains alive, CHAINED not engaged")
+			}
+		}
+	}
+
+	/** Bind (or re-bind) one main entry at the relay and remember its
+	 *  token; identical keys reuse the token. Returns the token. */
+	private fun bindChainEntry(
+		r: ProxyChainRelay,
+		gw: ProxyChainRelay.GatewayBinding,
+		entry: ProxyListFetcher.ProxyEntry,
+	): String {
+		val key = proxyKeyOf(entry)
+		synchronized(chainTokens) {
+			val token = chainTokens[key] ?: "c" + relayTokenSeq.getAndIncrement().toString(16)
+			chainTokens[key] = token
+			r.bindChainToken(
+				token,
+				ProxyChainRelay.ChainBundle(
+					gateway = gw,
+					main = ProxyChainRelay.Hop(entry.scheme, entry.host, entry.port, null, null),
+				),
+			)
+			return token
+		}
+	}
+
+	/** Reissue bindings for the new chain-healthy set; tokens of entries
+	 *  that fell out are unbound unless still needed by a per-host
+	 *  verified chain. */
+	private fun rebindChainSet(
+		r: ProxyChainRelay,
+		gw: ProxyChainRelay.GatewayBinding,
+		newHealthy: List<HealthyProxy>,
+	) {
+		val needed = HashSet<String>()
+		synchronized(chainTokens) {
+			for (h in newHealthy) {
+				bindChainEntry(r, gw, h.entry)
+				needed += proxyKeyOf(h.entry)
+			}
+			// keep tokens still referenced by per-host verifiedChains
+			for (st in hostStates.values) {
+				for (h in st.verifiedChains) {
+					needed += proxyKeyOf(h.entry)
+				}
+			}
+			val stale = chainTokens.keys.filter { it !in needed }
+			for (key in stale) {
+				val token = chainTokens.remove(key) ?: continue
+				r.bindChainToken(token, null)
+			}
+		}
+	}
+
+	// endregion
+
+	private fun RoutePlan.label(): String = when (this) {
+		RoutePlan.Direct -> "direct"
+		is RoutePlan.ViaProxy -> "pool attempt"
+		is RoutePlan.ViaChain -> "chain attempt"
 	}
 
 	/** Event trigger: host has no (unfailed) verified proxy => verify it,
@@ -523,6 +771,28 @@ object ProxyPoolController {
 					st.failedKeys.clear() // freshly verified: per-host ledger resets
 				}
 				Log.i(TAG, "host=$host verify: ${verified.size} proxies for the pool plan")
+				// 4.6.4 (5/7): a challenged host whose direct proxies all fail
+				// gets its dedicated pass through the CHAIN verifier when a
+				// chain-capable gateway is up; every passing chain is bound
+				// at the relay immediately (bind-time, not plan-time)
+				if (verified.isEmpty()) {
+					val gw = gateway
+					val r = relay?.takeIf { it.isRunning }
+					if (gw != null && r != null) {
+						val chainReport = ProxyHealthChecker.verifyChainsForHost(
+							r, base, gw, snapshot, host, s.poolTimeoutChainS,
+						)
+						val chains = chainReport.healthy
+							.filter { proxyKeyOf(it.entry) !in dropped }
+						for (h in chains) {
+							bindChainEntry(r, gw, h.entry)
+						}
+						synchronized(st) {
+							st.verifiedChains = chains
+						}
+						Log.i(TAG, "host=$host chain verify: ${chains.size} chains for the chain plan")
+					}
+				}
 			} catch (e: Exception) {
 				e.printStackTraceDebug()
 			} finally {
@@ -542,8 +812,13 @@ object ProxyPoolController {
 	 * offending proxy is skipped FOR THIS HOST only: it answered well at
 	 * transport level, the exit IP is what got challenged.
 	 */
-	fun reportChallenge(host: String, route: RoutePlan.ViaProxy) {
-		val key = proxyKeyOf(route.proxy.entry)
+	fun reportChallenge(host: String, route: RoutePlan) {
+		val proxy = when (route) {
+			is RoutePlan.ViaProxy -> route.proxy
+			is RoutePlan.ViaChain -> route.proxy
+			RoutePlan.Direct -> return
+		}
+		val key = proxyKeyOf(proxy.entry)
 		val st = stateOf(host)
 		synchronized(st) { st.failedKeys += key }
 		if (challengedHosts.add(host)) {
@@ -580,6 +855,21 @@ object ProxyPoolController {
 
 	enum class FailureClass { RESET, TIMEOUT, TLS, OTHER }
 
+	/**
+	 * The static-proxy transport for the bootstrap's gateway fetch: the
+	 * provider's selector + authenticator (read-only reuse; HTTPS-typed
+	 * static proxies fetch fine here even though they can't chain). Null
+	 * when no static proxy is configured.
+	 */
+	private fun gatewayTransportOrNull(base: OkHttpClient): OkHttpClient? {
+		val provider = proxyProviderRef?.get() ?: return null
+		provider.proxy ?: return null
+		return base.newBuilder()
+			.proxySelector(provider.selector)
+			.proxyAuthenticator(provider.authenticator)
+			.build()
+	}
+
 	// endregion
 
 	// region refresh orchestration (event-driven entry points only)
@@ -604,7 +894,16 @@ object ProxyPoolController {
 			}
 			try {
 				status = status.copy(refreshing = true)
-				val listsResult = ProxyListFetcher.fetchLists(
+				val rawGateway = gatewayTransportOrNull(base)
+				val chainGw = resolveChainGateway(s)
+				gateway = chainGw
+
+				// ---- list bootstrap (amendment 8 order):
+				// 1) direct, 2) disk/mirrors (inside the fetcher), 3) the
+				// gateway transport, 4) chains are tested BELOW through the
+				// gateway as well. The gateway path is only taken when
+				// nothing direct-shaped produced a single candidate.
+				var listsResult = ProxyListFetcher.fetchLists(
 					// the cycle's transport is a HARD-LOCKED direct clone of
 					// the base client: list downloads never cross the pool
 					base.newBuilder()
@@ -615,6 +914,25 @@ object ProxyPoolController {
 					s.poolMirrors,
 					ctx.cacheDir,
 				)
+				if (listsResult.entries.isEmpty() && rawGateway != null) {
+					Log.i(TAG, "list bootstrap: direct+disk+mirror produced 0 candidates; retrying through the gateway")
+					listsResult = ProxyListFetcher.fetchLists(
+						rawGateway,
+						s.poolLists,
+						s.poolMirrors,
+						ctx.cacheDir,
+					)
+					listsResult = listsResult.copy(
+						reports = listsResult.reports.map { rep ->
+							if (rep.error == null) {
+								// provenance, not honesty: this pass crossed the gateway
+								rep.copy(source = ProxyListFetcher.ListSource.GATEWAY)
+							} else {
+								rep
+							}
+						},
+					)
+				}
 				candidates = listsResult.entries
 				val report = ProxyHealthChecker.check(
 					base, listsResult.entries, s.poolTestUrl, s.poolMaxHealthy, s.poolTimeoutDirectS,
@@ -623,8 +941,33 @@ object ProxyPoolController {
 					ProxyHealthChecker.saveToCache(ctx.cacheDir, report)
 					droppedProxyKeys.clear() // fresh healthy set: drops re-earn themselves
 				}
-				val summary = buildSummary(listsResult, report)
-				status = Status(report.healthy, false, summary)
+
+				// ---- chain stage: only with a chain-capable gateway. The
+				// relay starts on first use (and is stopped event-side when
+				// chains are dead and CHAINED is not engaged).
+				var chainReport: ProxyHealthChecker.HealthReport? = null
+				if (chainGw != null && listsResult.entries.isNotEmpty()) {
+					val r = ensureRelay()
+					if (r != null) {
+						chainReport = ProxyHealthChecker.checkChains(
+							r, base, chainGw, listsResult.entries,
+							s.poolTestUrl, s.poolMaxHealthy, s.poolTimeoutChainS,
+						)
+						chainHealthy = chainReport.healthy
+						rebindChainSet(r, chainGw, chainReport.healthy)
+					}
+				} else {
+					chainHealthy = emptyList()
+				}
+				maybeStopRelay()
+
+				val summary = buildSummary(listsResult, report, chainReport)
+				status = Status(
+					report.healthy, false, summary,
+					chainsCount = chainHealthy.size,
+					challengedCount = challengedHosts.size,
+					gatewayLabel = if (chainGw != null) "static" else "none",
+				)
 				Log.i(TAG, "refresh done: $summary")
 			} catch (e: Exception) {
 				e.printStackTraceDebug()
@@ -643,17 +986,32 @@ object ProxyPoolController {
 	private fun buildSummary(
 		lists: ProxyListFetcher.Result,
 		health: ProxyHealthChecker.HealthReport,
+		chains: ProxyHealthChecker.HealthReport?,
 	): String {
 		val direct = lists.reports.count { it.error == null && it.source == ProxyListFetcher.ListSource.DIRECT }
 		val disk = lists.reports.count { it.error == null && it.source == ProxyListFetcher.ListSource.DISK }
 		val mirror = lists.reports.count { it.error == null && it.source == ProxyListFetcher.ListSource.MIRROR }
+		val viaGateway = lists.reports.count { it.error == null && it.source == ProxyListFetcher.ListSource.GATEWAY }
 		val failed = lists.reports.count { it.error != null }
-		return "${health.healthy.size} healthy of ${health.sampled} sampled " +
-			"(${health.candidatesTotal} candidates; lists: $direct direct/$disk disk/$mirror mirror" +
-			(if (failed > 0) ", $failed failed" else "") + ")"
+		return buildString {
+			append("${health.healthy.size} healthy of ${health.sampled} sampled ")
+			append("(${health.candidatesTotal} candidates; lists: $direct direct/$disk disk/$mirror mirror")
+			if (viaGateway > 0) {
+				append("/$viaGateway gateway")
+			}
+			if (failed > 0) {
+				append(", $failed failed")
+			}
+			append(")")
+			if (chains != null) {
+				append("; chains: ${chains.healthy.size} healthy of ${chains.sampled} sampled")
+			}
+		}
 	}
 
-	/** Human-readable status for the settings screen (event-only wording). */
+	/** Human-readable status for the settings screen (event-only wording).
+	 *  5/7 categories: the chain, challenged-host and gateway states ride
+	 *  the same line (the full 7/7 screen reads them from Status fields). */
 	fun statusLine(mode: PoolMode): String {
 		if (modeSnapshot == PoolMode.OFF) {
 			return if (settingsRef?.poolMode == PoolMode.OFF) {
@@ -669,6 +1027,15 @@ object ProxyPoolController {
 			append(status.lastSummary)
 			if (status.refreshing) {
 				append("; checking...")
+			}
+			if (mode == PoolMode.CHAINED) {
+				append(if (status.gatewayLabel == "none") "; no gateway" else "; gateway ${status.gatewayLabel}")
+				append("; ${status.chainsCount} chains")
+			} else if (status.chainsCount > 0) {
+				append("; ${status.chainsCount} chains")
+			}
+			if (status.challengedCount > 0) {
+				append("; ${status.challengedCount} challenged")
 			}
 		}
 	}
@@ -712,6 +1079,58 @@ object ProxyPoolController {
 			return client
 		}
 	}
+
+	/**
+	 * 5/7: the pooled CHAIN client for one token-bound chain route - same
+	 * derivation rules as [pooled], but pinned to the loopback relay and
+	 * carrying the relay secret + chain token in its proxy authenticator
+	 * (per-route client, never per-request; amendment 4). A restarted relay
+	 * gets a new port, so the port is part of the LRU key.
+	 */
+	fun pooledChain(tier: OkHttpClient, token: String): OkHttpClient? {
+		val port = relayPortOrNull() ?: return null
+		val authHeader = relayAuthHeaderOrNull() ?: return null
+		val key = System.identityHashCode(tier) to "chain:$token@$port"
+		synchronized(pooledLock) {
+			pooledClients[key]?.let { return it }
+			val relayProxy = Proxy(
+				Proxy.Type.HTTP,
+				InetSocketAddress(InetAddress.getLoopbackAddress(), port),
+			)
+			val selector = object : ProxySelector() {
+				override fun select(uri: URI?): List<Proxy> = listOf(relayProxy)
+				override fun connectFailed(uri: URI?, sa: SocketAddress?, ioe: IOException?) = Unit
+			}
+			val authenticator = Authenticator { _, response ->
+				val request = response.request
+				if (request.header("Proxy-Authorization") != null) {
+					// relay already challenged this connection once: never loop
+					null
+				} else {
+					request.newBuilder()
+						.header("Proxy-Authorization", authHeader)
+						.header(ProxyChainRelay.HEADER_CHAIN_TOKEN, token)
+						.build()
+				}
+			}
+			val client = tier.newBuilder()
+				.proxySelector(selector)
+				.proxyAuthenticator(authenticator)
+				.cookieJar(CloudflareFilteringCookieJar(tier.cookieJar))
+				.apply {
+					interceptors().removeAll {
+						it is PoolRoutingInterceptor || it is CloudFlareInterceptor
+					}
+				}
+				.build()
+			pooledClients[key] = client
+			return client
+		}
+	}
+
+	fun relayPortOrNull(): Int? = relay?.takeIf { it.isRunning }?.port
+
+	fun relayAuthHeaderOrNull(): String? = relay?.takeIf { it.isRunning }?.buildAuthHeader()
 
 	private val DIRECT_PLAN = listOf(RoutePlan.Direct)
 }

@@ -19,8 +19,9 @@ import java.io.IOException
  *
  * Per request:
  *  - mode/scheme-gate first: pool snapshots OFF (amendment 3), inert
- *    (static proxy or SSL bypass), non-HTTPS -> plain proceed, exactly as
- *    if the pool were not installed (amendment 1: off = off);
+ *    (static proxy under FALLBACK/ALWAYS - CHAINED is the exception, its
+ *    gateway IS the static proxy - or SSL bypass), non-HTTPS -> plain
+ *    proceed, exactly as if the pool were not installed (amendment 1);
  *  - ProxyPoolController.planFor() yields the ordered routes; the plan is
  *    [Direct] alone whenever the host is excluded (wsrv.nl/worker, manual
  *    list, login cookies) or the pool has nothing to offer;
@@ -28,10 +29,11 @@ import java.io.IOException
  *    GETs and therefore retry-safe, amendment 7); POST and other
  *    non-idempotent methods take ONLY the first planned route - never a
  *    retry, never a second route;
- *  - a ViaProxy attempt executes on the pooled client for that route (one
- *    per distinct route, LRU 32, derived from the CALLING TIER's client -
- *    the tier is read from the call itself so manga-tier headers ride
- *    pooled requests too);
+ *  - a ViaProxy attempt executes on the pooled client for that route, a
+ *    ViaChain attempt (5/7) on the pooled relay client carrying the relay
+ *    secret + chain token (one client per distinct route, LRU 32, derived
+ *    from the CALLING TIER's client - the tier is read from the call
+ *    itself so manga-tier headers ride pooled requests too);
  *  - while a pooled attempt runs, a controller-owned watchdog polls the
  *    OUTER call's isCanceled() every WATCHDOG_STEP_MS and cancels the
  *    inner call the moment the outer one dies (amendment 7: ExoPlayer
@@ -89,7 +91,9 @@ class PoolRoutingInterceptor(
 					}
 				}
 
-				is ProxyPoolController.RoutePlan.ViaProxy -> {
+				is ProxyPoolController.RoutePlan.ViaProxy,
+				is ProxyPoolController.RoutePlan.ViaChain,
+				-> {
 					try {
 						val response = executeViaPooled(chain, route, request)
 						if (response.code == 429 || response.code == 503) {
@@ -108,6 +112,11 @@ class PoolRoutingInterceptor(
 						}
 						ProxyPoolController.reportOutcome(host, route, null)
 						return response
+					} catch (e: RelayUnavailable) {
+						// relay died between planning and execution: skip the
+						// chain route WITHOUT a ledger mark - the proxy is
+						// not at fault for our own lifecycle
+						continue
 					} catch (e: IOException) {
 						ProxyPoolController.reportOutcome(host, route, e)
 						lastError = e
@@ -122,17 +131,27 @@ class PoolRoutingInterceptor(
 		throw lastError ?: IOException("proxy pool: all planned routes failed for $host")
 	}
 
-	/** Executes one pooled attempt with the outer-call cancel watchdog. */
+	/** Executes one pooled attempt (direct-pool route OR relay chain route)
+	 *  with the outer-call cancel watchdog. */
 	private fun executeViaPooled(
 		chain: Interceptor.Chain,
-		route: ProxyPoolController.RoutePlan.ViaProxy,
+		route: ProxyPoolController.RoutePlan,
 		request: Request,
 	): Response {
 		if (chain.call().isCanceled()) {
 			throw IOException("Canceled")
 		}
 		val tier = tierClientOf(chain)
-		val pooled = ProxyPoolController.pooled(tier, route.proxy.entry)
+		val pooled: OkHttpClient = when (route) {
+			is ProxyPoolController.RoutePlan.ViaProxy ->
+				ProxyPoolController.pooled(tier, route.proxy.entry)
+
+			is ProxyPoolController.RoutePlan.ViaChain ->
+				ProxyPoolController.pooledChain(tier, route.token) ?: throw RelayUnavailable()
+
+			ProxyPoolController.RoutePlan.Direct ->
+				throw IllegalArgumentException("executeViaPooled called with Direct")
+		}
 		val inner = pooled.newCall(request)
 		val outer = chain.call()
 		val watchdog = ProxyPoolController.scope.launch {
@@ -150,6 +169,10 @@ class PoolRoutingInterceptor(
 			watchdog.cancel()
 		}
 	}
+
+	/** Sentinel: the relay was gone when a planned chain attempt ran. Not a
+	 *  route failure - the interceptor skips the route without reporting. */
+	private class RelayUnavailable : IOException("proxy pool: relay not running for chain route")
 
 	/** The client the running call belongs to, so the pooled clone keeps the
 	 *  tier's headers/limits. RealCall's `client` is a public val on the
