@@ -75,7 +75,6 @@ object ProxyHealthChecker {
 	/** Hard ceiling for one attempt, so a hung candidate cannot hold a slot. */
 	const val DEFAULT_CALL_TIMEOUT_MS = 13_000
 
-	const val STATE_MAX_AGE_MS = 30 * 60 * 1_000L
 	private const val STATE_FILE = "proxy_pool_state.txt"
 	private const val STATE_VERSION = 1
 
@@ -284,8 +283,13 @@ object ProxyHealthChecker {
 	}
 
 	/**
-	 * Reads the cache file; null when absent, unreadable, wrong version, or older
-	 * than STATE_MAX_AGE_MS.
+	 * Reads the cache file; null when absent, unreadable or of a wrong version.
+	 *
+	 * There is deliberately NO staleness window. Cached entries are used until a
+	 * refresh replaces them or the user clears the pool: an entry that silently
+	 * expires is indistinguishable from a pool that never had one, and the refresh
+	 * that would replace it is triggered by demand and by the failure latch, not
+	 * by a clock. The timestamp in the header is kept for the status line only.
 	 */
 	fun loadFromCache(cacheDir: File): List<HealthyProxy>? {
 		return try {
@@ -298,10 +302,7 @@ object ProxyHealthChecker {
 			if (head.size < 2 || head[0].toIntOrNull() != STATE_VERSION) {
 				return null
 			}
-			val checkedAt = head[1].toLongOrNull() ?: return null
-			if (System.currentTimeMillis() - checkedAt > STATE_MAX_AGE_MS) {
-				return null
-			}
+			head[1].toLongOrNull() ?: return null // timestamp, diagnostics only
 			lines.drop(1).mapNotNull { line ->
 				val parts = line.split(' ')
 				if (parts.size < 4) return@mapNotNull null
