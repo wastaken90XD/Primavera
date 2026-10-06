@@ -256,7 +256,7 @@ object ProxyListFetcher {
 			}
 			Download(lines, bytesRead, hitByteCap, error)
 		} catch (e: Exception) {
-			printStackTraceDebug(e)
+			e.printStackTraceDebug()
 			Download(emptyList(), 0L, false, e.javaClass.simpleName + ": " + (e.message ?: ""))
 		}
 	}
