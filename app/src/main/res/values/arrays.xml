@@ -354,6 +354,18 @@
 		<item>@string/media_repeat_all</item>
 	</string-array>
 
+	<string-array name="pool_cookie_modes" translatable="false">
+		<item>@string/pool_cookie_auto</item>
+		<item>@string/pool_cookie_all</item>
+		<item>@string/pool_cookie_none</item>
+	</string-array>
+
+	<string-array name="values_pool_cookie_modes" translatable="false">
+		<item>AUTO</item>
+		<item>ALL</item>
+		<item>NONE</item>
+	</string-array>
+
 	<string-array name="proxy_pool_modes" translatable="false">
 		<item>Off</item>
 		<item>@string/pool_mode_fallback</item>
