@@ -13,6 +13,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import org.wastaken.kotatsu.api21.core.network.CloudFlareInterceptor
 import org.wastaken.kotatsu.api21.core.network.cookies.CloudflareFilteringCookieJar
+import org.wastaken.kotatsu.api21.core.network.disableCertificateVerification
+import org.wastaken.kotatsu.api21.core.network.installExtraCertificates
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyHealthChecker.HealthyProxy
 import org.wastaken.kotatsu.api21.core.network.proxy.ProxyProvider
 import org.wastaken.kotatsu.api21.core.network.proxy.ProxyType
@@ -35,8 +37,7 @@ import javax.net.ssl.SSLHandshakeException
 /** Operating mode of the experimental proxy pool (pref value = enum name).
  *  Chained routing arrives with the bootstrap commit (5/7); the values here
  *  are exactly the ones the legacy screen already knows. */
-enum class PoolMode {
-	/** Default. The routing interceptor passes every request through. */
+enum class PoolMode {	/** Default. The routing interceptor passes every request through. */
 	OFF,
 
 	/** Direct route is tried first; pool proxies are the fallback. */
@@ -117,6 +118,13 @@ enum class LoginRule(val logLabel: String) {
  *    exhaustion, and the pool being asked for a route it does not have yet.
  */
 object ProxyPoolController {
+
+	/** 6/7 per-tier routing: which client tier an installed
+	 *  PoolRoutingInterceptor belongs to. VIDEO exists so the spec's
+	 *  per-tier install can be honored WITHOUT ever pooling playback
+	 *  traffic - the Task-B guarantee is enforced inside the interceptor
+	 *  (VIDEO passes through unconditionally) instead of by removal. */
+	enum class PoolTier { BASE, MANGA, VIDEO }
 
 	private const val TAG = "ProxyPool"
 	private const val EVAL_LOG_CAP = 64
@@ -1088,6 +1096,7 @@ object ProxyPoolController {
 						it is PoolRoutingInterceptor || it is CloudFlareInterceptor
 					}
 				}
+				.applyPoolTls()
 				.build()
 			pooledClients[key] = client
 			return client
@@ -1136,10 +1145,26 @@ object ProxyPoolController {
 						it is PoolRoutingInterceptor || it is CloudFlareInterceptor
 					}
 				}
+				.applyPoolTls()
 				.build()
 			pooledClients[key] = client
 			return client
 		}
+	}
+
+	/** Task C 4.10.2 (6/7): pooled and chain clients get their TLS policy
+	 *  from ONE helper - the app's standard extra-certificates install, or
+	 *  the spec'd opt-in "Ignore certificate errors on proxied requests"
+	 *  (same helper the base client uses; no second trust-all variant).
+	 *  They never inherit the base client's trust-all path. A GC'd context
+	 *  skips the extras install and keeps the tier's inherited sockets. */
+	private fun OkHttpClient.Builder.applyPoolTls(): OkHttpClient.Builder {
+		if (settingsRef?.poolInsecureCerts == true) {
+			disableCertificateVerification()
+		} else {
+			contextRef?.get()?.let { installExtraCertificates(it) }
+		}
+		return this
 	}
 
 	fun relayPortOrNull(): Int? = relay?.takeIf { it.isRunning }?.port

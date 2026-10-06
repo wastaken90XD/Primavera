@@ -707,6 +707,14 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		get() = (prefs.getString(KEY_POOL_TIMEOUT_CHAIN_S, null)?.trim()?.toIntOrNull()
 			?: ProxyHealthChecker.DEFAULT_CHAIN_TIMEOUT_S).coerceIn(1, 60)
 
+	/** Task C 4.10.2 opt-in (6/7): "Ignore certificate errors on proxied
+	 *  requests". Pooled and chain clients apply disableCertificateVerification()
+	 *  ONLY via this flag; otherwise they run installExtraCertificates() like a
+	 *  normal client. They NEVER inherit the base client's trust-all path -
+	 *  the global SSL bypass stays unrelated to pooling. */
+	val poolInsecureCerts: Boolean
+		get() = prefs.getBoolean(KEY_POOL_INSECURE_CERTS, false)
+
 	var localListOrder: SortOrder
 		get() = prefs.getEnumValue(KEY_LOCAL_LIST_ORDER, SortOrder.NEWEST)
 		set(value) = prefs.edit { putEnumValue(KEY_LOCAL_LIST_ORDER, value) }
@@ -1082,6 +1090,7 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_POOL_MIRRORS = "pool_mirrors"
 		const val KEY_POOL_TIMEOUT_DIRECT_S = "pool_timeout_direct_s"
 		const val KEY_POOL_TIMEOUT_CHAIN_S = "pool_timeout_chain_s"
+		const val KEY_POOL_INSECURE_CERTS = "pool_insecure_certs"
 		const val KEY_IMAGES_PROXY = "images_proxy_2"
 
 		// Experimental wsrv.nl quality settings (revertable)

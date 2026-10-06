@@ -17,6 +17,7 @@ import org.wastaken.kotatsu.api21.core.network.cookies.PreferencesCookieJar
 import org.wastaken.kotatsu.api21.core.network.imageproxy.ImageProxyInterceptor
 import org.wastaken.kotatsu.api21.core.network.imageproxy.RealImageProxyInterceptor
 import org.wastaken.kotatsu.api21.core.network.proxy.ProxyProvider
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolMode
 import org.wastaken.kotatsu.api21.core.network.proxypool.PoolRoutingInterceptor
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyPoolController
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
@@ -87,13 +88,15 @@ interface NetworkModule {
 				installExtraCertificates(contextProvider.get())
 			}
 			cache(cache)
-			// PoolRoutingInterceptor sits OUTERMOST (registered first): each
-			// direct attempt proceeds down the normal chain; each pooled
+			// PoolRoutingInterceptor sits OUTERMOST per tier (6/7 spec): one
+			// instance installed on THIS tier, only when the pool is built
+			// with a non-OFF mode (same apply-at-build precedent as the SSL
+			// bypass); Off<->any-mode applies after an app restart
+			// (amendment 3; note lives on the settings screen). Each pooled
 			// attempt becomes its own call on a pooled client that inherits
 			// everything below except CloudFlare + this interceptor
-			// (amendment 4). Build-time wiring: Off<->any-mode applies after
-			// an app restart (amendment 3; note lives on the settings screen).
-			addInterceptor(PoolRoutingInterceptor(settings))
+			// (amendment 4).
+			installPoolRouting(this, settings, ProxyPoolController.PoolTier.BASE)
 			addInterceptor(GZipInterceptor())
 			addInterceptor(CloudFlareInterceptor())
 			addInterceptor(RateLimitInterceptor())
@@ -115,19 +118,23 @@ interface NetworkModule {
 		fun provideMangaHttpClient(
 			@BaseHttpClient baseClient: OkHttpClient,
 			commonHeadersInterceptor: CommonHeadersInterceptor,
+			settings: AppSettings,
 		): OkHttpClient = baseClient.newBuilder().apply {
+			// 6/7 spec: per-tier routing interceptor, outermost on this tier
+			installPoolRouting(this, settings, ProxyPoolController.PoolTier.MANGA)
 			addNetworkInterceptor(CacheLimitInterceptor())
 			addInterceptor(commonHeadersInterceptor)
 		}.build()
 
 		/**
-		 * Media/playback tier: same shape as the manga tier (cache limit +
-		 * common headers) but re-pinned to ProxyProvider's static selector,
-		 * so the experimental proxy pool is never used for video (spec 5.7 /
-		 * Task-B guarantee). The routing interceptor is REMOVED here even
-		 * though every mode also skip-filters media hosts: belt and braces,
-		 * zero behavior ambiguity for ExoPlayer/AV streams. The static-proxy
-		 * authenticator is inherited from the base builder.
+		 * Media/playback tier (6/7 spec): the spec's per-tier install gets a
+		 * VIDEO-tagged routing interceptor here (outermost on this tier),
+		 * and the VIDEO tag makes the interceptor pass every request
+		 * through in-engine - the Task-B guarantee ("the pool never plays
+		 * media") is enforced by the tier tag, not by interceptor removal,
+		 * plus ProxyProvider's static selector stays re-pinned. Belt and
+		 * braces remains: without the tag the old removal still applied.
+		 * The static-proxy authenticator is inherited from the base builder.
 		 */
 		@Provides
 		@Singleton
@@ -136,12 +143,30 @@ interface NetworkModule {
 			@BaseHttpClient baseClient: OkHttpClient,
 			commonHeadersInterceptor: CommonHeadersInterceptor,
 			proxyProvider: ProxyProvider,
+			settings: AppSettings,
 		): OkHttpClient = baseClient.newBuilder().apply {
 			proxySelector(proxyProvider.selector)
-			interceptors().removeAll { it is PoolRoutingInterceptor }
+			installPoolRouting(this, settings, ProxyPoolController.PoolTier.VIDEO)
 			addNetworkInterceptor(CacheLimitInterceptor())
 			addInterceptor(commonHeadersInterceptor)
 		}.build()
+
+		/** 6/7 spec per-tier install: removes any routing interceptor
+		 *  inherited from the base builder, then - only when the pool was
+		 *  built with a non-OFF mode (same apply-at-build precedent as the
+		 *  SSL bypass) - inserts one tagged instance OUTERMOST on the given
+		 *  tier's chain. Mode flips between OFF and anything else therefore
+		 *  wait for restart, which amendment 3's status line already says. */
+		private fun installPoolRouting(
+			builder: OkHttpClient.Builder,
+			settings: AppSettings,
+			tier: ProxyPoolController.PoolTier,
+		) {
+			builder.interceptors().removeAll { it is PoolRoutingInterceptor }
+			if (settings.poolMode != PoolMode.OFF) {
+				builder.interceptors().add(0, PoolRoutingInterceptor(settings, tier))
+			}
+		}
 
 	}
 }
