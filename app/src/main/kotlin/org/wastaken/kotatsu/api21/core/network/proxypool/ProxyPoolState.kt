@@ -228,12 +228,18 @@ object ProxyPoolState {
 	}
 
 	private fun availableRoutes(): List<PoolRoute> {
-		val out = ArrayList<PoolRoute>(healthy.size + 1)
 		val gw = gateway
 		val port = relayPort
-		if (gw != null && port != 0 && isUsable(gw.key)) {
-			out += PoolRoute.RelayRoute(port, relayCredential())
+		val chain = relayRef?.get()?.route
+		if (gw != null && port != 0 && chain != null && isUsable(gw.key)) {
+			// Chain mode means the chain IS the route. Offering single proxies
+			// alongside it would round-robin a host between one exit and twenty,
+			// which is not what the switch says. Single-proxy routing is the
+			// fallback state: it is what runs while no chain is configured, and
+			// what comes back if advanceChain() runs out of main proxies.
+			return listOf(PoolRoute.RelayRoute(port, relayCredential()))
 		}
+		val out = ArrayList<PoolRoute>(healthy.size)
 		for (h in healthy) {
 			val endpoint = h.entry.toEndpoint()
 			if (!isUsable(endpoint.key)) {
@@ -242,6 +248,31 @@ object ProxyPoolState {
 			out += PoolRoute.Single(endpoint)
 		}
 		return out
+	}
+
+	/**
+	 * Moves the relay on to the next healthy main proxy once the current one is
+	 * struck out, and drops the chain when none is left - which is what puts the
+	 * pool back into single-proxy routing. Rotating a chain costs nothing: the
+	 * relay keeps its port and the pooled client keeps being reused.
+	 */
+	private fun advanceChain() {
+		val relay = relayRef?.get() ?: return
+		val chain = relay.route ?: return
+		if (isUsable(chain.main.key)) {
+			return
+		}
+		val next = healthy.firstOrNull { candidate ->
+			val key = candidate.entry.toEndpoint().key
+			key != chain.main.key && isUsable(key)
+		}
+		if (next == null) {
+			relay.route = null
+			Log.w(TAG, "chain: no healthy main proxy left; single-proxy routing until the next refresh")
+			return
+		}
+		relay.route = ChainRoute(chain.gateway, next.entry.toEndpoint())
+		Log.i(TAG, "chain: main proxy rotated to ${next.entry.host}")
 	}
 
 	private fun isUsable(proxyKey: String): Boolean {
@@ -352,6 +383,7 @@ object ProxyPoolState {
 				// the whole chain and drop good proxies
 				currentChain()?.let {
 					strike(it.main.key, cls, host)
+					advanceChain()
 				}
 			}
 		}
@@ -383,6 +415,7 @@ object ProxyPoolState {
 		}
 		strike(proxyKey, FailureClass.OTHER, targetHost)
 		noteTransportFailure()
+		advanceChain()
 	}
 
 	private fun strike(proxyKey: String, cls: FailureClass, host: String) {

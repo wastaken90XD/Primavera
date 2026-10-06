@@ -132,11 +132,18 @@ class ProxyPoolRoutingInterceptor(
 		var lastError: IOException? = null
 		var attempts = 0
 		var challenges = 0
+		val tried = HashSet<String>(MAX_POOL_ATTEMPTS)
 		while (attempts < MAX_POOL_ATTEMPTS) {
 			if (outer.isCanceled()) {
 				throw lastError ?: IOException("canceled")
 			}
 			val route = ProxyPoolState.nextRoute(host) ?: break
+			// one attempt per distinct route: re-dialing a route that just failed
+			// (a chain keeps its route key while its main proxy rotates) only
+			// spends the budget on the same exit twice
+			if (!tried.add(route.key)) {
+				break
+			}
 			val client = PooledClients.clientFor(category, route) ?: break
 			attempts++
 			val inner = client.newCall(request)
