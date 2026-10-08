@@ -1083,7 +1083,7 @@
 	<string name="proxy_pool_summary">Route HTTPS through rotating public proxies when DPI keeps resetting direct connections</string>
 	<string name="pool_mode_fallback">Fallback (direct first, proxy after resets)</string>
 	<string name="pool_mode_always">Always (pool first)</string>
-	<string name="pool_mode_chained">Chained (through your static proxy + one pool exit, e.g. Tor)</string>
+
 	<string name="pool_disclosure">Switching the pool Off or on takes effect after an app restart; switching between Fallback and Always applies immediately. PRIVACY: operators of public proxies see the HOST NAMES of the servers you contact (the traffic itself stays HTTPS-encrypted), exactly like any VPN relay. Use OFF if that is unacceptable. Chains relay your requests through 1–3 proxies in order; the last hop receives the target host name. Your static proxy is just one possible first hop — no step requires it, and the pool keeps working with a static proxy or “Ignore SSL errors” enabled. Picks and manual proxies live in the app cache folder proxy_pool/picks.txt: clearing the app cache deletes the file without asking. Picks are never auto-removed; three failed checks only pause them. Hosts holding an account cookie stay direct only if its switch below is on. Cloudflare cf_* cookies are filtered from proxied requests unless you switch that off. wsrv.nl image proxying always stays direct.</string>
 	<string name="pool_mode_chained">Chained (legacy; degrades to Off at restart)</string>
 	<string name="pool_mirror_lists_title">Mirror list URLs</string>
