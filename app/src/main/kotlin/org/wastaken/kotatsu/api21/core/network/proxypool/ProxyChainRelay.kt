@@ -67,15 +67,22 @@ class ProxyChainRelay(
 	private val connectTimeoutSeconds: Int = DEFAULT_CONNECT_TIMEOUT_S,
 ) {
 
-	/** A single hop address the relay can drive through any supported handshake. */
+	/** A single hop address the relay can drive through any supported
+	 *  handshake. Credentials stay hop-local (amendment 5: manual picks may
+	 *  carry them, the static-proxy hop reads them from ProxyProvider
+	 *  settings at bind time and passes them here). They are never logged. */
 	data class Hop(
 		val scheme: ProxyListFetcher.Scheme,
 		val host: String,
 		val port: Int,
+		val login: String? = null,
+		val password: String? = null,
 	)
 
-	/** Active gateway: found/bootstrap hops have no credentials; the static
-	 *  gateway reads login/password from ProxyProvider settings at bind time. */
+	/** Active gateway (legacy single-gateway shape): found/bootstrap hops
+	 *  have no credentials; the static gateway reads login/password from
+	 *  ProxyProvider settings at bind time. Kept for the 5/7 callers; the
+	 *  open-chain engine composes Routes directly. */
 	data class GatewayBinding(
 		val hop: Hop,
 		val username: String?,
@@ -83,25 +90,57 @@ class ProxyChainRelay(
 		val sourceLabel: String, // "static" | "bootstrap" | "found" (status line)
 	)
 
-	/** One token => one isolated chain (gateway + main). */
+	/** Legacy single-gateway bundle = the static+main two-hop route. */
 	data class ChainBundle(
 		val gateway: GatewayBinding,
 		val main: Hop,
-	)
+	) {
+		fun toRoute(): Route = Route(
+			listOf(
+				gateway.hop.copy(login = gateway.username, password = gateway.password),
+				main,
+			),
+		)
+	}
 
+	/**
+	 * Amendment 5 (open chains, item 2): one token => one ordered route.
+	 * 1 hop: client -> relay -> hop1 -> target. N hops: client -> relay ->
+	 * hop1 -> ... -> hopN -> target. Hop 1 is the entry (the old "gateway"
+	 * became just one possible entry); the LAST hop is the exit and is
+	 * handed the target HOST NAME unresolved (amendment 5 2e). No step
+	 * requires a static proxy - hops can come from anywhere the policy
+	 * engine picks them.
+	 */
+	data class Route(
+		val hops: List<Hop>,
+	) {
+		init {
+			require(hops.isNotEmpty()) { "open chains need at least one hop" }
+		}
+
+		/** Host names only, in order (logging rule: never URLs/creds). */
+		fun display(): String = hops.joinToString(",") { it.host }
+	}
+
+	/** Hop-level failure classes (amendment 5 item 8: the log names which
+	 *  hop failed - the index travels with the exception). */
 	enum class HopFailure(val logLabel: String) {
-		GATEWAY_UNREACHABLE("gateway unreachable"),
-		GATEWAY_REFUSED("gateway refused tunnel to main proxy"),
-		MAIN_HANDSHAKE_FAILED("main proxy handshake failed"),
+		HOP_UNREACHABLE("hop unreachable"),
+		HOP_TUNNEL_REFUSED("hop refused tunnel to the next hop"),
+		HOP_HANDSHAKE_FAILED("hop handshake failed"),
 		TARGET_CONNECT_FAILED("target connect failed through the chain"),
 		NO_CHAIN("no chain bound for token"),
 		INTERNAL("relay internal error"),
 	}
 
-	private class ChainException(val failure: HopFailure, detail: String) :
-		Exception(detail)
+	private class ChainException(
+		val failure: HopFailure,
+		val hopIndex: Int,
+		detail: String,
+	) : Exception(detail)
 
-	private val chainsByToken = ConcurrentHashMap<String, ChainBundle>()
+	private val chainsByToken = ConcurrentHashMap<String, Route>()
 	private val openSockets = Collections.newSetFromMap(ConcurrentHashMap<Socket, Boolean>())
 
 	@Volatile
@@ -147,13 +186,20 @@ class ProxyChainRelay(
 		return port
 	}
 
-	/** Binds (token -> gateway+main) so one CONNECT can name its chain; null clears. */
-	fun bindChainToken(token: String, bundle: ChainBundle?) {
-		if (bundle == null) {
+	/** Binds (token -> ordered route) so one CONNECT can name its chain;
+	 *  null clears. Amendment 5: NEW open-chain API. */
+	fun bindRouteToken(token: String, route: Route?) {
+		if (route == null) {
 			chainsByToken.remove(token)
 		} else {
-			chainsByToken[token] = bundle
+			chainsByToken[token] = route
 		}
+	}
+
+	/** Legacy binding (5/7 callers): converts the gateway+main bundle into
+	 *  an ordered Route. */
+	fun bindChainToken(token: String, bundle: ChainBundle?) {
+		bindRouteToken(token, bundle?.toRoute())
 	}
 
 	fun clearChainTokens() {
@@ -202,21 +248,21 @@ class ProxyChainRelay(
 				// constant-time compare happens inside; wrong secret = silent close
 				return closeQuiet(client, "relay auth missing/mismatch")
 			}
-			val bundle = headers[HEADER_CHAIN_TOKEN]?.let { chainsByToken[it] }
+			val route = headers[HEADER_CHAIN_TOKEN]?.let { chainsByToken[it] }
 				?: run {
-					log(target.host, null, HopFailure.NO_CHAIN)
+					log(target.host, null, HopFailure.NO_CHAIN, -1)
 					return closeQuiet(client, "no chain bound for token")
 				}
 			val upstream = Socket()
 			track(upstream)
 			try {
-				openChain(upstream, bundle, target)
+				openChain(upstream, route, target)
 			} catch (ce: ChainException) {
-				log(target.host, bundle, ce.failure)
+				log(target.host, route, ce.failure, ce.hopIndex)
 				closeQuiet(upstream, ce.failure.logLabel)
 				return closeQuiet(client, ce.failure.logLabel)
 			} catch (ioe: Exception) {
-				log(target.host, bundle, HopFailure.INTERNAL)
+				log(target.host, route, HopFailure.INTERNAL, -1)
 				closeQuiet(upstream, "internal")
 				return closeQuiet(client, "internal")
 			}
@@ -241,64 +287,57 @@ class ProxyChainRelay(
 
 	// region chain + hop handshakes
 
-	/** gateway TCP -> handshake to MAIN through it -> handshake to TARGET through MAIN. */
-	private fun openChain(upstream: Socket, bundle: ChainBundle, target: HopTarget) {
-		val gw = bundle.gateway
-		val main = bundle.main
+	/**
+	 * Amendment 5 item 2e: N-hop loop. Connect TCP to hop 1, then run each
+	 * hop's handshake THROUGH the tunnel the previous hop opened, and
+	 * finally hand the LAST hop the target host name, unresolved:
+	 *   stage i: hop[i] opens a tunnel to hops[i+1] (i < N-1) or to the
+	 *   target (exit stage). A 1-hop route is one CONNECT stage.
+	 * The exit stage is the old main-hop semantics (isMain = true in the
+	 * SOCKS5 helper, keeping greeting/refusal classes distinct); every
+	 * intermediate stage refusal is "hop refused tunnel to the next hop".
+	 */
+	private fun openChain(upstream: Socket, route: Route, target: HopTarget) {
+		val hops = route.hops
 		try {
 			upstream.tcpNoDelay = true
-			upstream.connect(InetSocketAddress(gw.hop.host, gw.hop.port), connectTimeoutSeconds * 1000)
+			upstream.connect(InetSocketAddress(hops[0].host, hops[0].port), connectTimeoutSeconds * 1000)
 			// same parse guard as the client side: a hop that stops answering
 			// mid-handshake must not pin a worker thread forever (reset to 0
 			// for the piping phase by the caller; not a 4.4 timer, a guard)
 			upstream.soTimeout = HANDSHAKE_READ_TIMEOUT_MS
 		} catch (ioe: Exception) {
-			throw ChainException(HopFailure.GATEWAY_UNREACHABLE, gw.hop.host)
+			throw ChainException(HopFailure.HOP_UNREACHABLE, 0, hops[0].host)
 		}
 		val input = upstream.getInputStream()
 		val output = upstream.getOutputStream()
-		// hop 1: gateway -> main (a phase-mapped ChainException keeps its
-		// class; any other IO failure here = the reachable gateway did not
-		// open the tunnel, so GATEWAY_REFUSED, never INTERNAL: amendment 9)
-		try {
-			when (gw.hop.scheme) {
-				ProxyListFetcher.Scheme.HTTP ->
-					httpConnect(input, output, main.host, main.port, gw.username, gw.password, HopFailure.GATEWAY_REFUSED)
+		for (i in hops.indices) {
+			val hop = hops[i]
+			// stage destination: the next hop, or the target on the exit stage
+			val isExit = i == hops.lastIndex
+			val destHost = if (isExit) target.host else hops[i + 1].host
+			val destPort = if (isExit) target.port else hops[i + 1].port
+			val refusal = if (isExit) HopFailure.TARGET_CONNECT_FAILED else HopFailure.HOP_TUNNEL_REFUSED
+			try {
+				when (hop.scheme) {
+					ProxyListFetcher.Scheme.HTTP ->
+						httpConnect(input, output, destHost, destPort, hop.login, hop.password, refusal, i)
 
-				ProxyListFetcher.Scheme.SOCKS4 ->
-					socks4aConnect(input, output, main.host, main.port, HopFailure.GATEWAY_REFUSED)
+					ProxyListFetcher.Scheme.SOCKS4 ->
+						socks4aConnect(input, output, destHost, destPort, refusal, i)
 
-				ProxyListFetcher.Scheme.SOCKS5 ->
-					socks5Connect(input, output, main.host, main.port, gw.username, gw.password, HopFailure.GATEWAY_REFUSED, isMain = false)
+					ProxyListFetcher.Scheme.SOCKS5 ->
+						socks5Connect(input, output, destHost, destPort, hop.login, hop.password, refusal, isExit, i)
+				}
+			} catch (e: ChainException) {
+				// a scheme helper already classified the phase; pin the hop number on it
+				throw e
+			} catch (ioe: Exception) {
+				// unmapped IO failure: a reachable hop that did not open its
+				// tunnel (handshake on the exit stage, tunnel refusal otherwise)
+				val cls = if (isExit) refusal else HopFailure.HOP_TUNNEL_REFUSED
+				throw ChainException(cls, i, "hop$i ${ioe.javaClass.simpleName}")
 			}
-		} catch (e: ChainException) {
-			throw e
-		} catch (ioe: Exception) {
-			throw ChainException(HopFailure.GATEWAY_REFUSED, "hop1 ${ioe.javaClass.simpleName}")
-		}
-		// hop 2: main -> target (through the tunnel hop 1 just opened);
-		// unmapped IO failures on a SOCKS5 main are MAIN_HANDSHAKE_FAILED,
-		// on HTTP/SOCKS4a mains TARGET_CONNECT_FAILED
-		try {
-			when (main.scheme) {
-				ProxyListFetcher.Scheme.HTTP ->
-					httpConnect(input, output, target.host, target.port, null, null, HopFailure.TARGET_CONNECT_FAILED)
-
-				ProxyListFetcher.Scheme.SOCKS4 ->
-					socks4aConnect(input, output, target.host, target.port, HopFailure.TARGET_CONNECT_FAILED)
-
-				ProxyListFetcher.Scheme.SOCKS5 ->
-					socks5Connect(input, output, target.host, target.port, null, null, HopFailure.TARGET_CONNECT_FAILED, isMain = true)
-			}
-		} catch (e: ChainException) {
-			throw e
-		} catch (ioe: Exception) {
-			val cls = if (main.scheme == ProxyListFetcher.Scheme.SOCKS5) {
-				HopFailure.MAIN_HANDSHAKE_FAILED
-			} else {
-				HopFailure.TARGET_CONNECT_FAILED
-			}
-			throw ChainException(cls, "hop2 ${ioe.javaClass.simpleName}")
 		}
 	}
 
@@ -310,6 +349,7 @@ class ProxyChainRelay(
 		username: String?,
 		password: String?,
 		failure: HopFailure,
+		hopIndex: Int,
 	) {
 		val authority = "$host:$port"
 		val sb = StringBuilder(authority.length + 96)
@@ -328,11 +368,11 @@ class ProxyChainRelay(
 		output.flush()
 		val status = readStatusLine(input)
 		if (!status.startsWith("HTTP/1.1 200") && !status.startsWith("HTTP/1.0 200")) {
-			throw ChainException(failure, "CONNECT $authority -> $status")
+			throw ChainException(failure, hopIndex, "CONNECT $authority -> $status")
 		}
 		// consume remaining proxy headers
 		val drain = readConnectHeaders(input)
-		if (drain == null) throw ChainException(failure, "CONNECT $authority bad trailing headers")
+		if (drain == null) throw ChainException(failure, hopIndex, "CONNECT $authority bad trailing headers")
 	}
 
 	private fun socks4aConnect(
@@ -341,6 +381,7 @@ class ProxyChainRelay(
 		host: String,
 		port: Int,
 		failure: HopFailure,
+		hopIndex: Int,
 	) {
 		val name = host.toByteArray(Charsets.ISO_8859_1)
 		val req = ByteArray(9 + 1 + name.size + 1)
@@ -355,9 +396,9 @@ class ProxyChainRelay(
 		req[9 + name.size] = 0
 		output.write(req)
 		output.flush()
-		val resp = readFully(input, 8) ?: throw ChainException(failure, "socks4a no reply")
+		val resp = readFully(input, 8) ?: throw ChainException(failure, hopIndex, "socks4a no reply")
 		if (resp[0].toInt() != 0 || resp[1].toInt() != 0x5A) {
-			throw ChainException(failure, "socks4a rep=${resp[1].toInt() and 0xFF}")
+			throw ChainException(failure, hopIndex, "socks4a rep=${resp[1].toInt() and 0xFF}")
 		}
 	}
 
@@ -370,6 +411,7 @@ class ProxyChainRelay(
 		password: String?,
 		failure: HopFailure,
 		isMain: Boolean,
+		hopIndex: Int,
 	) {
 		val needsAuth = username != null
 		// greeting/auth phase failures on a SOCKS5 MAIN are "main handshake
@@ -378,8 +420,8 @@ class ProxyChainRelay(
 		val greet = if (needsAuth) byteArrayOf(0x05, 0x02, 0x00, 0x02) else byteArrayOf(0x05, 0x01, 0x00)
 		output.write(greet)
 		output.flush()
-		val sel = readFully(input, 2) ?: throw ChainException(handshakeFailure, "socks5 no greeting")
-		if (sel[0].toInt() != 0x05) throw ChainException(handshakeFailure, "socks5 ver")
+		val sel = readFully(input, 2) ?: throw ChainException(handshakeFailure, hopIndex, "socks5 no greeting")
+		if (sel[0].toInt() != 0x05) throw ChainException(handshakeFailure, hopIndex, "socks5 ver")
 		val method = sel[1].toInt() and 0xFF
 		when {
 			method == 0x00 -> Unit
@@ -394,11 +436,11 @@ class ProxyChainRelay(
 				System.arraycopy(p, 0, auth, 3 + u.size, p.size)
 				output.write(auth)
 				output.flush()
-				val rep = readFully(input, 2) ?: throw ChainException(handshakeFailure, "socks5 auth no reply")
-				if (rep[1].toInt() != 0) throw ChainException(handshakeFailure, "socks5 auth rejected")
+				val rep = readFully(input, 2) ?: throw ChainException(handshakeFailure, hopIndex, "socks5 auth no reply")
+				if (rep[1].toInt() != 0) throw ChainException(handshakeFailure, hopIndex, "socks5 auth rejected")
 			}
 
-			else -> throw ChainException(handshakeFailure, "socks5 method $method unsupported")
+			else -> throw ChainException(handshakeFailure, hopIndex, "socks5 method $method unsupported")
 		}
 		val name = host.toByteArray(Charsets.ISO_8859_1)
 		val req = ByteArray(4 + 1 + name.size + 2)
@@ -413,14 +455,14 @@ class ProxyChainRelay(
 		req[off + 1] = port.toByte()
 		output.write(req)
 		output.flush()
-		val head = readFully(input, 4) ?: throw ChainException(failure, "socks5 no reply head")
-		if (head[0].toInt() != 0x05) throw ChainException(failure, "socks5 bad reply ver")
+		val head = readFully(input, 4) ?: throw ChainException(failure, hopIndex, "socks5 no reply head")
+		if (head[0].toInt() != 0x05) throw ChainException(failure, hopIndex, "socks5 bad reply ver")
 		val rep = head[1].toInt() and 0xFF
 		if (rep != 0) {
 			// rep 2..6 = the named endpoint was refused *inside* this hop's
 			// tunnel: main->target failures are TARGET_CONNECT_FAILED; gateway
 			// ->main failures are GATEWAY_REFUSED (amendment 9 visibility)
-			throw ChainException(if (isMain) TARGET_CONNECT_CLASS else failure, "socks5 rep=$rep")
+			throw ChainException(if (isMain) TARGET_CONNECT_CLASS else failure, hopIndex, "socks5 rep=$rep")
 		}
 		// consume BND.ADDR per ATYP
 		when (head[3].toInt()) {
@@ -541,10 +583,16 @@ class ProxyChainRelay(
 		closeQuiet(b, "")
 	}
 
-	private fun log(targetHost: String, bundle: ChainBundle?, failure: HopFailure) {
-		val gwDesc = bundle?.gateway?.hop?.let { "${it.host}:${it.port}" } ?: "-"
-		val mainDesc = bundle?.main?.let { "${it.host}:${it.port}" } ?: "-"
-		Log.w(TAG, "chain fail (${failure.logLabel}): gateway=$gwDesc main=$mainDesc target=$targetHost")
+	/** Item 8 logging: host names only, the chain as hosts IN ORDER, and
+	 *  WHICH hop failed with the hop-level class. */
+	private fun log(targetHost: String, route: Route?, failure: HopFailure, hopIndex: Int) {
+		val chainDesc = route?.display() ?: "-"
+		val hopDesc = if (hopIndex >= 0 && route != null && hopIndex < route.hops.size) {
+			"hop=$hopIndex(${route.hops[hopIndex].host})"
+		} else {
+			"hop=-"
+		}
+		Log.w(TAG, "chain fail (${failure.logLabel}): chain=[$chainDesc] $hopDesc target=$targetHost")
 	}
 
 	val activeSocketCount: Int get() = workerCount.get()

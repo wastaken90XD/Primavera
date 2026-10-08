@@ -28,6 +28,10 @@ import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_LISTS
 import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_MAX_HEALTHY
 import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_TEST_URL
 import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_MAX_HEALTHY_CAP
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolCertChecks
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolCfCookies
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolFetchLists
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolCookiesMode
 import org.wastaken.kotatsu.api21.core.network.proxypool.PoolMode
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyHealthChecker
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyListFetcher
@@ -658,8 +662,14 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		get() = prefs.getString(KEY_PROXY_SECRET, null)?.nullIfEmpty()
 
 	// Experimental proxy pool (defaults + docs in core/network/proxypool/)
+	/** Amendment 5: modes are Off / Fallback / Always ("as before"). Read
+	 *  defensively: a stored value the engine no longer offers (CHAINED
+	 *  from the superseded experiment) degrades to OFF rather than
+	 *  crashing the settings load. */
 	val poolMode: PoolMode
-		get() = prefs.getEnumValue(KEY_POOL_MODE, PoolMode.OFF)
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_MODE, PoolMode.OFF)
+		}.getOrDefault(PoolMode.OFF)
 
 	val poolLists: List<String>
 		get() = (prefs.getString(KEY_POOL_LISTS, null) ?: POOL_DEFAULT_LISTS)
@@ -707,13 +717,73 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		get() = (prefs.getString(KEY_POOL_TIMEOUT_CHAIN_S, null)?.trim()?.toIntOrNull()
 			?: ProxyHealthChecker.DEFAULT_CHAIN_TIMEOUT_S).coerceIn(1, 60)
 
-	/** Task C 4.10.2 opt-in (6/7): "Ignore certificate errors on proxied
-	 *  requests". Pooled and chain clients apply disableCertificateVerification()
-	 *  ONLY via this flag; otherwise they run installExtraCertificates() like a
-	 *  normal client. They NEVER inherit the base client's trust-all path -
-	 *  the global SSL bypass stays unrelated to pooling. */
-	val poolInsecureCerts: Boolean
-		get() = prefs.getBoolean(KEY_POOL_INSECURE_CERTS, false)
+	/** Task C 4.10.2 / amendment 5 item 4: certificate checks on proxied
+	 *  requests. FOLLOW_APP (default): pooled clients inherit the tier TLS
+	 *  setup whole (trust-all included when the app SSL bypass is on; the
+	 *  pool is never inert because of that setting). ALWAYS_VERIFY forces
+	 *  the platform+bundled-roots helper; ALWAYS_IGNORE reuses the app's
+	 *  disableCertificateVerification on the pooled client only. No second
+	 *  trust-all implementation exists; existing cert code is not edited. */
+	val poolCertChecks: PoolCertChecks
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_CERT_CHECKS, PoolCertChecks.FOLLOW_APP)
+		}.getOrDefault(PoolCertChecks.FOLLOW_APP)
+
+	/** Amendment 5 item 2a: hops per chain, 1..3, default 2. Hop 1 is the
+	 *  entry (the old static gateway is just one possible entry); the last
+	 *  hop is the exit that reaches the target. */
+	val poolChainLength: Int
+		get() = (prefs.getString(KEY_POOL_CHAIN_LENGTH, null)?.trim()?.toIntOrNull() ?: 2).coerceIn(1, 3)
+
+	/** Amendment 5 item 2f: fetch lists through a proxy. NEVER = the old
+	 *  hard-locked direct behavior; IF_DIRECT_FAILS (default) = direct,
+	 *  disk and mirrors first, then one pass through the static proxy or
+	 *  an alive pool proxy; ALWAYS = through one before anything. */
+	val poolFetchLists: PoolFetchLists
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_FETCH_VIA, PoolFetchLists.IF_DIRECT_FAILS)
+		}.getOrDefault(PoolFetchLists.IF_DIRECT_FAILS)
+
+	/** Amendment 5 item 5a: plain HTTP rides the pool too. Default On
+	 *  (not restricted); Off keeps the pre-amendment HTTPS-only shape. */
+	val poolPlainHttp: Boolean
+		get() = prefs.getBoolean(KEY_POOL_PLAIN_HTTP, true)
+
+	/** Amendment 5 item 5b: skip hosts that hold a login cookie. Default
+	 *  Off; the narrow rule of 4.8 item 5 applies only when On. */
+	val poolSkipLoginHosts: Boolean
+		get() = prefs.getBoolean(KEY_POOL_SKIP_LOGIN_HOSTS, false)
+
+	/** Amendment 5 item 5c: category switches (all default On). */
+	val poolCatSources: Boolean
+		get() = prefs.getBoolean(KEY_POOL_CAT_SOURCES, true)
+
+	val poolCatVideo: Boolean
+		get() = prefs.getBoolean(KEY_POOL_CAT_VIDEO, true)
+
+	val poolCatServices: Boolean
+		get() = prefs.getBoolean(KEY_POOL_CAT_SERVICES, true)
+
+	/** Amendment 5 item 5d: Cloudflare cookies on proxied requests. */
+	val poolCfCookies: PoolCfCookies
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_CF_COOKIES, PoolCfCookies.STRIP)
+		}.getOrDefault(PoolCfCookies.STRIP)
+
+	/** Ordinary cookies on proxied requests (earlier setting, kept):
+	 *  AUTO = strip the Cookie header on pool retries after the first
+	 *  failure; SEND = never strip; STRIP = always strip on pooled routes. */
+	val poolCookiesMode: PoolCookiesMode
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_COOKIES_MODE, PoolCookiesMode.AUTO)
+		}.getOrDefault(PoolCookiesMode.AUTO)
+
+	/** Amendment 5 item 5f: the Always-use host list. Never-use overrides
+	 *  it (isForbiddenManually runs first in the planner). */
+	val poolAlwaysUseHosts: Set<String>
+		get() = prefs.getStringSet(KEY_POOL_ALWAYS_HOSTS, emptySet()).orEmpty()
+			.mapTo(HashSet()) { it.trim().lowercase() }
+			.also { it.remove("") }
 
 	var localListOrder: SortOrder
 		get() = prefs.getEnumValue(KEY_LOCAL_LIST_ORDER, SortOrder.NEWEST)
@@ -1090,7 +1160,20 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_POOL_MIRRORS = "pool_mirrors"
 		const val KEY_POOL_TIMEOUT_DIRECT_S = "pool_timeout_direct_s"
 		const val KEY_POOL_TIMEOUT_CHAIN_S = "pool_timeout_chain_s"
-		const val KEY_POOL_INSECURE_CERTS = "pool_insecure_certs"
+
+		const val KEY_POOL_CHAIN_LENGTH = "pool_chain_length"
+		const val KEY_POOL_FETCH_VIA = "pool_fetch_via"
+
+		// Amendment 5: restrictions became switches (default = not restricted)
+		const val KEY_POOL_PLAIN_HTTP = "pool_plain_http"
+		const val KEY_POOL_SKIP_LOGIN_HOSTS = "pool_skip_login_hosts"
+		const val KEY_POOL_CAT_SOURCES = "pool_cat_sources"
+		const val KEY_POOL_CAT_VIDEO = "pool_cat_video"
+		const val KEY_POOL_CAT_SERVICES = "pool_cat_services"
+		const val KEY_POOL_CF_COOKIES = "pool_cf_cookies"
+		const val KEY_POOL_COOKIES_MODE = "pool_cookies_mode"
+		const val KEY_POOL_ALWAYS_HOSTS = "pool_always_hosts"
+		const val KEY_POOL_CERT_CHECKS = "pool_cert_checks"
 		const val KEY_IMAGES_PROXY = "images_proxy_2"
 
 		// Experimental wsrv.nl quality settings (revertable)

@@ -165,10 +165,73 @@ object ProxyHealthChecker {
 		val sample = candidates.shuffled().take(CHAIN_SAMPLE_CAP)
 		val probe = Request.Builder().url(testUrl).head().build()
 		val healthy = probeAll(sample) { entry ->
-			probeChained(relay, baseClient, gateway, entry, probe, timeoutS, GENERIC_SUCCESS_RANGE)
+			val route = ProxyChainRelay.ChainBundle(
+				gateway = gateway,
+				main = ProxyChainRelay.Hop(entry.scheme, entry.host, entry.port),
+			).toRoute()
+			probeChained(relay, baseClient, route, entry, probe, timeoutS, GENERIC_SUCCESS_RANGE)
 		}
 		Log.i(TAG, "chain health: ${sample.size} sampled, ${healthy.size} healthy (cap $maxChains)")
 		HealthReport(candidates.size, sample.size, System.currentTimeMillis(), healthy.take(maxChains), null)
+	}
+
+	/**
+	 * Amendment 5 open chain pass: [routePairs] pairs a reporting ENTRY
+	 * (the exit hop the ledger and rows key on) with its fully composed
+	 * ordered route (1..3 hops, any sources - found, picked or the static
+	 * gateway). The assembled route end-to-end is what gets probed through
+	 * the relay, honoring the user's chain timeout (item 6e: the same full
+	 * HTTPS check; chain tests test the hops together in order).
+	 */
+	suspend fun checkOpenRoutes(
+		relay: ProxyChainRelay,
+		baseClient: OkHttpClient,
+		routePairs: List<Pair<ProxyEntry, ProxyChainRelay.Route>>,
+		probe: Request,
+		maxChains: Int,
+		timeoutS: Int = DEFAULT_CHAIN_TIMEOUT_S,
+	): HealthReport = coroutineScope {
+		if (!relay.isRunning) {
+			return@coroutineScope HealthReport(routePairs.size, 0, 0L, emptyList(), "relay not running")
+		}
+		val byEntry = HashMap<ProxyEntry, ProxyChainRelay.Route>(routePairs.size * 2).apply {
+			routePairs.forEach { (entry, route) -> put(entry, route) }
+		}
+		val sample = routePairs.shuffled().take(CHAIN_SAMPLE_CAP)
+		val sampleEntries = sample.map { it.first }
+		val healthy = probeAll(sampleEntries) { entry ->
+			val route = byEntry[entry] ?: return@probeAll null
+			probeChained(relay, baseClient, route, entry, probe, timeoutS, GENERIC_SUCCESS_RANGE)
+		}
+		Log.i(TAG, "open-chain health: ${sample.size} sampled, ${healthy.size} healthy (cap $maxChains)")
+		HealthReport(routePairs.size, sample.size, System.currentTimeMillis(), healthy.take(maxChains), null)
+	}
+
+	/** The open-chain counterpart for a single host (4.6.4 second choice):
+	 *  every assembled route for this host's candidates is probed against
+	 *  the host's own HTTPS URL, challenge-aware. */
+	suspend fun verifyOpenRoutesForHost(
+		relay: ProxyChainRelay,
+		baseClient: OkHttpClient,
+		routePairs: List<Pair<ProxyEntry, ProxyChainRelay.Route>>,
+		host: String,
+		timeoutS: Int = DEFAULT_CHAIN_TIMEOUT_S,
+	): HealthReport = coroutineScope {
+		if (!relay.isRunning) {
+			return@coroutineScope HealthReport(routePairs.size, 0, 0L, emptyList(), "relay not running")
+		}
+		val byEntry = HashMap<ProxyEntry, ProxyChainRelay.Route>(routePairs.size * 2).apply {
+			routePairs.forEach { (entry, route) -> put(entry, route) }
+		}
+		val sample = routePairs.shuffled().take(HOST_VERIFY_CAP)
+		val sampleEntries = sample.map { it.first }
+		val probe = Request.Builder().url("https://$host/").get().build()
+		val healthy = probeAll(sampleEntries) { entry ->
+			val route = byEntry[entry] ?: return@probeAll null
+			probeChained(relay, baseClient, route, entry, probe, timeoutS, VERIFY_SUCCESS_RANGE)
+		}
+		Log.i(TAG, "verify-open-chains host=$host: ${sample.size} sampled, ${healthy.size} passed (keep $MAX_PER_HOST_KEEP)")
+		HealthReport(routePairs.size, sample.size, System.currentTimeMillis(), healthy.take(MAX_PER_HOST_KEEP), null)
 	}
 
 	/**
@@ -189,7 +252,11 @@ object ProxyHealthChecker {
 		val sample = candidates.shuffled().take(HOST_VERIFY_CAP)
 		val probe = Request.Builder().url("https://$host/").get().build()
 		val healthy = probeAll(sample) { entry ->
-			probeChained(relay, baseClient, gateway, entry, probe, timeoutS, VERIFY_SUCCESS_RANGE)
+			val route = ProxyChainRelay.ChainBundle(
+				gateway = gateway,
+				main = ProxyChainRelay.Hop(entry.scheme, entry.host, entry.port),
+			).toRoute()
+			probeChained(relay, baseClient, route, entry, probe, timeoutS, VERIFY_SUCCESS_RANGE)
 		}
 		Log.i(TAG, "verify-chains host=$host: ${sample.size} sampled, ${healthy.size} passed (keep $MAX_PER_HOST_KEEP)")
 		HealthReport(candidates.size, sample.size, System.currentTimeMillis(), healthy.take(MAX_PER_HOST_KEEP), null)
@@ -278,12 +345,13 @@ object ProxyHealthChecker {
 		}
 	}
 
-	/** Chain probe: the candidate is the MAIN hop through [gateway], bound
-	 *  under its own token so parallel probes stay isolated (relay 2/7). */
+	/** Chain probe: the given ordered route is bound under its own token so
+	 *  parallel probes stay isolated (relay 2/7; amended 5: open N-hop
+	 *  routes - the timeout budget scales with the hop count). */
 	private fun probeChained(
 		relay: ProxyChainRelay,
 		baseClient: OkHttpClient,
-		gateway: ProxyChainRelay.GatewayBinding,
+		route: ProxyChainRelay.Route,
 		entry: ProxyEntry,
 		probe: Request,
 		timeoutS: Int,
@@ -291,13 +359,7 @@ object ProxyHealthChecker {
 	): HealthyProxy? {
 		val token = "probe-${probeTokenSeq.incrementAndGet()}"
 		return try {
-			relay.bindChainToken(
-				token,
-				ProxyChainRelay.ChainBundle(
-					gateway = gateway,
-					main = ProxyChainRelay.Hop(entry.scheme, entry.host, entry.port),
-				),
-			)
+			relay.bindRouteToken(token, route)
 			val relayProxy = Proxy(
 				Proxy.Type.HTTP,
 				InetSocketAddress.createUnresolved("127.0.0.1", relay.port),
@@ -319,7 +381,8 @@ object ProxyHealthChecker {
 				.cookieJar(CookieJar.NO_COOKIES)
 				.connectTimeout(timeoutS.toLong(), TimeUnit.SECONDS)
 				.readTimeout(timeoutS.toLong(), TimeUnit.SECONDS)
-				.callTimeout((timeoutS * 3 + 1).toLong(), TimeUnit.SECONDS) // chain = 2 extra handshakes
+				// every hop costs one extra handshake (amendment 5 route budget)
+				.callTimeout((timeoutS * (route.hops.size + 1) + 1).toLong(), TimeUnit.SECONDS)
 				.build()
 			val started = System.currentTimeMillis()
 			transport.newCall(probe).execute().use { response ->
@@ -334,7 +397,7 @@ object ProxyHealthChecker {
 		} catch (e: Exception) {
 			null
 		} finally {
-			relay.bindChainToken(token, null)
+			relay.bindRouteToken(token, null)
 		}
 	}
 
