@@ -8,6 +8,7 @@ import android.text.TextWatcher
 import android.view.View
 import android.widget.Toast
 import androidx.core.content.getSystemService
+import androidx.core.view.updatePadding
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import org.wastaken.kotatsu.api21.R
@@ -142,6 +143,7 @@ class ProxyPoolListActivity : BaseActivity<ActivityProxyPoolListBinding>() {
 			}
 		})
 
+
 		viewBinding.buttonRefresh.setOnClickListener {
 			ProxyPoolController.refreshAsync(force = true)
 			viewBinding.progress.visibility = View.VISIBLE
@@ -213,6 +215,16 @@ class ProxyPoolListActivity : BaseActivity<ActivityProxyPoolListBinding>() {
 			page++
 			notifyPage()
 		}
+	}
+
+	override fun onApplyWindowInsets(
+		v: android.view.View,
+		insets: androidx.core.view.WindowInsetsCompat,
+	): androidx.core.view.WindowInsetsCompat {
+		val bars = insets.systemBarsInsets
+		viewBinding.appbar.updatePadding(left = bars.left, right = bars.right, top = bars.top)
+		viewBinding.recyclerView.updatePadding(left = bars.left, right = bars.right, bottom = bars.bottom)
+		return insets.consumeAllSystemBarsInsets()
 	}
 
 	private fun testRows(entries: List<org.wastaken.kotatsu.api21.core.network.proxypool.ProxyListFetcher.ProxyEntry>) {
