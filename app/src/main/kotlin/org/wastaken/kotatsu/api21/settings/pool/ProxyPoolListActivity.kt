@@ -49,12 +49,6 @@ class ProxyPoolListActivity : BaseActivity<ActivityProxyPoolListBinding>() {
 		setSupportActionBar(viewBinding.toolbar)
 		supportActionBar?.setDisplayHomeAsUpEnabled(true)
 		viewBinding.toolbar.setNavigationOnClickListener { onBackPressedDispatcher.onBackPressed() }
-		viewBinding.root.setOnApplyWindowInsetsListener { v, insets ->
-			val bars = insets.systemBarsInsets()
-			v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-			insets.consumeAllSystemBarsInsets()
-			insets
-		}
 		viewBinding.recyclerView.also {
 			it.setHasFixedSize(false)
 			it.layoutManager = LinearLayoutManager(this)
