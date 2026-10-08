@@ -90,6 +90,29 @@ enum class PoolFetchLists {
 	ALWAYS,
 }
 
+/** Amendment 5 5c: the proxy-selection mode wheel. */
+enum class PoolSelectionMode {
+	/** Round-robin over the healthy set (the pre-10c behavior). */
+	AUTO,
+
+	/** Picked proxies queue ahead of everything else in every route. */
+	SELECTED_FIRST,
+
+	/** Only picked/manual proxies may ride; nothing else is used. */
+	SELECTED_ONLY,
+}
+
+/** Amendment 5 5c: slot restriction for picked proxies inside a chain. */
+enum class PoolPickedRole {
+	ANY,
+
+	/** Picks line up for the hop-1/middle slots. */
+	ENTRY,
+
+	/** Picks line up for the exit (target-facing) slot. */
+	EXIT,
+}
+
 /**
  * Proxy pool - amendment 5 (open chaining, restrictions became switches).
  *
@@ -217,6 +240,21 @@ object ProxyPoolController {
 	private val hostStates = ConcurrentHashMap<String, HostRouteState>()
 	private val droppedProxyKeys = mutableSetOf<String>() // session-only; cleared by a successful pass
 
+	/** Amendment 5 5c/d: picked and manual pool entries, loaded from the
+	 *  cache-dir pick ledger (ProxyPoolPickStore). Picks survive refreshes
+	 *  and are never auto-removed; manual entries may carry credentials and
+	 *  are kept out of every list fetch. */
+	@Volatile
+	private var pickedKeys: Set<String> = emptySet()
+
+	@Volatile
+	private var manualLines: Map<String, ProxyPoolPickStore.Line> = emptyMap()
+
+	/** 5e strike rule: picks with >= STRIKE_REMOVE_AT failed checks are
+	 *  excluded from AUTO use only - never removed from the stored file;
+	 *  a passing check rehabilitates them. */
+	private val excludedDeadPicks = mutableSetOf<String>()
+
 	/** Amendment 5 4e: proxies banned by a certificate-error while
 	 *  Certificate checks != ALWAYS_IGNORE. User-cleared only (Clear
 	 *  bans lands with the list screen in commit d). */
@@ -296,6 +334,11 @@ object ProxyPoolController {
 				Log.i(TAG, "start: ${cached.size} saved healthy entries (trusted until replaced)")
 			}
 		}
+		// 10c: the pick ledger travels with the app (cache dir): picks,
+		// manual entries, persisted bans, strike scores
+		scope.launch {
+			applyLedger(ProxyPoolPickStore.load(context.applicationContext.cacheDir))
+		}
 	}
 
 	/** The mode requests see RIGHT NOW: the build snapshot gates off<->on
@@ -341,7 +384,7 @@ object ProxyPoolController {
 		if (status.healthy.isEmpty() && chainHealthy.isEmpty() && !status.refreshing) {
 			refreshAsync(force = false)
 		}
-		val pool = poolRoutesFor(host)
+		val pool = applySelectionMode(poolRoutesFor(host))
 		val st = stateOf(host)
 		val alwaysUse = isListed(host, settings.poolAlwaysUseHosts)
 		return when (mode) {
@@ -376,7 +419,7 @@ object ProxyPoolController {
 			for (h in st.verifiedChains) {
 				if (out.size >= POOL_PLAN_CAP) break
 				val key = proxyKeyOf(h.entry)
-				if (key !in st.failedKeys && key !in droppedProxyKeys && key !in bannedProxyKeys) {
+				if (key !in st.failedKeys && key !in droppedProxyKeys && key !in bannedProxyKeys && key !in excludedDeadPicks) {
 					chainTokens[key]?.let { out += RoutePlan.ViaChain(h, it) }
 				}
 			}
@@ -388,7 +431,7 @@ object ProxyPoolController {
 			for (i in 0 until n) {
 				val h = global[(start + i) % global.size]
 				val key = proxyKeyOf(h.entry)
-				if (key in droppedProxyKeys || key in bannedProxyKeys) continue
+				if (key in droppedProxyKeys || key in bannedProxyKeys || key in excludedDeadPicks) continue
 				chainTokens[key]?.let { out += RoutePlan.ViaChain(h, it) }
 			}
 		}
@@ -406,7 +449,7 @@ object ProxyPoolController {
 			for (h in st.verified) {
 				if (out.size >= POOL_PLAN_CAP) break
 				val key = proxyKeyOf(h.entry)
-				if (key !in st.failedKeys && key !in droppedProxyKeys && key !in bannedProxyKeys) {
+				if (key !in st.failedKeys && key !in droppedProxyKeys && key !in bannedProxyKeys && key !in excludedDeadPicks) {
 					out += RoutePlan.ViaProxy(h)
 				}
 			}
@@ -572,6 +615,10 @@ object ProxyPoolController {
 				if (failure == null) {
 					proxyFailStreak.remove(key)
 					stateOf(host).poolFirst = true
+					if (excludedDeadPicks.remove(key)) {
+						Log.i(TAG, "proxy back from the dead-pick shelf (host=$host)")
+					}
+					persistStrikeClear(key)
 					touchManualPickSuccess(key)
 				} else {
 					if (route is RoutePlan.ViaChain && relay?.isRunning != true) {
@@ -608,21 +655,27 @@ object ProxyPoolController {
 						if (settingsRef?.poolCertChecks != PoolCertChecks.ALWAYS_IGNORE) {
 							if (bannedProxyKeys.add(key)) {
 								Log.w(TAG, "proxy banned after certificate error (host=$host); Clear bans re-enables it")
+								persistBan(key)
 							}
 						}
 					}
-					if (cls == FailureClass.TLS || streak >= PROXY_FAIL_DROP_STREAK) {
-						// event-driven session drop until a successful pass
-						// re-habilitates the proxy
-						if (droppedProxyKeys.add(key)) {
-							Log.w(
-								TAG,
-								"proxy dropped from plans after " +
-									(if (cls == FailureClass.TLS) "TLS error" else "$streak failures") +
-									" (host=$host)",
-							)
+						if (cls == FailureClass.TLS || streak >= PROXY_FAIL_DROP_STREAK) {
+							// 5e: picked/manual keys are never dropped - they
+							// only sit out AUTO use until a check passes again
+							if (key in pickedKeys || key in manualLines) {
+								if (excludedDeadPicks.add(key)) {
+									Log.w(TAG, "picked/manual proxy excluded from auto use (host=$host, $streak failures); a pass re-enables it")
+								}
+							} else if (droppedProxyKeys.add(key)) {
+								Log.w(
+									TAG,
+									"proxy dropped from plans after " +
+										(if (cls == FailureClass.TLS) "TLS error" else "$streak failures") +
+										" (host=$host)",
+								)
+							}
+							persistFailureStrike(key)
 						}
-					}
 					touchManualPickFailure(key, cls)
 					ensureVerifiedAsync(host)
 					if (remainingHealthy() == 0 && chainHealthy.isEmpty() && !status.refreshing) {
@@ -791,10 +844,44 @@ object ProxyPoolController {
 	): Map<String, ProxyChainRelay.Route> {
 		if (chainLength < 2 || entries.isEmpty()) return emptyMap()
 		val healthyEntries = healthy.map { it.entry }.distinctBy { proxyKeyOf(it) }
+		// 10c: the selection mode + picked-role wheels order the exit and
+		// middle pools; banned/dropped/dead-pick keys never enter a route
+		val mode = settingsRef?.poolSelectionMode ?: PoolSelectionMode.AUTO
+		val role = settingsRef?.poolPickedRole ?: PoolPickedRole.ANY
+		val picks = pickedKeys
+		val manual = manualLines
+		val deadBans = droppedProxyKeys + bannedProxyKeys + excludedDeadPicks
+		fun isPick(e: ProxyListFetcher.ProxyEntry): Boolean =
+			proxyKeyOf(e) in picks || proxyKeyOf(e) in manual
+
+		fun <T> orderByMode(list: List<T>, isPickFn: (T) -> Boolean, picksFirst: Boolean): List<T> =
+			when (mode) {
+				PoolSelectionMode.AUTO -> if (picksFirst) {
+					val p = list.filter(isPickFn)
+					if (p.isNotEmpty()) p + list.filterNot(isPickFn) else list
+				} else {
+					list
+				}
+
+				PoolSelectionMode.SELECTED_FIRST -> list.sortedByDescending(isPickFn)
+				PoolSelectionMode.SELECTED_ONLY -> list.filter(isPickFn)
+			}
+
+		val orderedExits = orderByMode(
+			entries.filter { proxyKeyOf(it) !in deadBans },
+			::isPick,
+			role == PoolPickedRole.EXIT,
+		)
+		val orderedMids = orderByMode(
+			healthyEntries.filter { proxyKeyOf(it) !in deadBans },
+			::isPick,
+			role == PoolPickedRole.ENTRY,
+		)
+		if (orderedExits.isEmpty()) return emptyMap()
 		val out = LinkedHashMap<String, ProxyChainRelay.Route>(maxRoutes * 2)
-		val start = if (healthyEntries.size <= 1) 0 else rotation.getAndIncrement() % healthyEntries.size
+		val start = if (orderedMids.isEmpty()) 0 else rotation.getAndIncrement() % orderedMids.size
 		var filled = 0
-		entriesLoop@ for ((i, exit) in entries.withIndex()) {
+		entriesLoop@ for ((i, exit) in orderedExits.withIndex()) {
 			if (filled >= maxRoutes) break
 			val hops = ArrayList<ProxyChainRelay.Hop>(3)
 			if (staticHop != null) {
@@ -804,8 +891,8 @@ object ProxyPoolController {
 			// and from each other (Auto-mode basis; selection rules layer in 10c)
 			var added = 0
 			var cursor = start
-			while (hops.size < chainLength - 1 && added < healthyEntries.size) {
-				val cand = healthyEntries[cursor % healthyEntries.size]
+			while (hops.size < chainLength - 1 && added < orderedMids.size) {
+				val cand = orderedMids[cursor % orderedMids.size]
 				cursor++
 				added++
 				if (proxyKeyOf(cand) == proxyKeyOf(exit)) continue
@@ -859,7 +946,7 @@ object ProxyPoolController {
 		gatewayTransportOrNull(base)?.let { return it }
 		val pick = status.healthy.firstOrNull {
 			val key = proxyKeyOf(it.entry)
-			key !in droppedProxyKeys && key !in bannedProxyKeys
+			key !in droppedProxyKeys && key !in bannedProxyKeys && key !in excludedDeadPicks
 		} ?: return null
 		val type = when (pick.entry.scheme) {
 			ProxyListFetcher.Scheme.HTTP -> Proxy.Type.HTTP
@@ -948,7 +1035,22 @@ object ProxyPoolController {
 					status = status.copy(refreshing = false)
 					return@launch
 				}
-				candidates = lists.entries
+				// 10c unified candidate set: list candidates UNION picked
+				// and manual entries (5d/5e: picks survive every refresh
+				// and manual entries are checked like everything else;
+				// manual credentials never leave the ledger map)
+				val ledger = ProxyPoolPickStore.load(ctx.cacheDir)
+				applyLedger(ledger)
+				val merged = LinkedHashMap<String, ProxyListFetcher.ProxyEntry>()
+				lists.entries.forEach { merged[it.toString()] = it }
+				for (line in ledger) {
+					if (line.kind == ProxyPoolPickStore.LineKind.PICKED ||
+						line.kind == ProxyPoolPickStore.LineKind.MANUAL
+					) {
+						merged.putIfAbsent(line.key, line.entry())
+					}
+				}
+				candidates = merged.values.toList()
 				val report = ProxyHealthChecker.check(
 					base, lists.entries, s.poolTestUrl, s.poolMaxHealthy, s.poolTimeoutDirectS,
 				)
@@ -1168,7 +1270,7 @@ object ProxyPoolController {
 	private fun remainingHealthy(): Int =
 		status.healthy.count {
 			val key = proxyKeyOf(it.entry)
-			key !in droppedProxyKeys && key !in bannedProxyKeys
+			key !in droppedProxyKeys && key !in bannedProxyKeys && key !in excludedDeadPicks
 		}
 
 	/**
@@ -1199,12 +1301,14 @@ object ProxyPoolController {
 	 *  (item 4e). Clear-bans action lands with the list screen (10d). */
 	fun bannedCount(): Int = bannedProxyKeys.size
 
-	/** Clear-bans re-enables every cert-banned proxy (item 4e). */
+	/** Clear-bans re-enables every banned proxy (item 4e): memory and the
+	 *  ledger lines alike - the file is the source of truth. */
 	fun clearBans() {
+		contextRef?.get()?.let { ProxyPoolPickStore.clearBans(it.cacheDir) }
 		if (bannedProxyKeys.isNotEmpty()) {
 			val n = bannedProxyKeys.size
 			bannedProxyKeys.clear()
-			Log.i(TAG, "user cleared $n certificate bans")
+			Log.i(TAG, "user cleared $n proxy bans")
 		}
 	}
 
@@ -1233,6 +1337,154 @@ object ProxyPoolController {
 	}
 
 	enum class FailureClass { RESET, TIMEOUT, TLS, OTHER }
+
+	// region pick ledger (amendment 5 10c)
+
+	/** Push a freshly loaded ledger into the in-memory views. Bans persist
+	 *  by file: they re-fill [bannedProxyKeys]; strike scores arm the
+	 *  dead-pick exclusion; picked/manual keys feed the selection modes. */
+	private fun applyLedger(lines: List<ProxyPoolPickStore.Line>) {
+		val picks = LinkedHashSet<String>(lines.size * 2)
+		val man = LinkedHashMap<String, ProxyPoolPickStore.Line>(lines.size * 2)
+		for (line in lines) {
+			when (line.kind) {
+				ProxyPoolPickStore.LineKind.PICKED -> picks += line.key
+				ProxyPoolPickStore.LineKind.MANUAL -> man[line.key] = line
+				ProxyPoolPickStore.LineKind.BANNED -> {
+					if (bannedProxyKeys.add(line.key)) {
+						Log.i(TAG, "ban restored from the ledger: ${line.host}")
+					}
+				}
+
+				else -> Unit
+			}
+		}
+		pickedKeys = picks
+		manualLines = man
+		val strikes = ProxyPoolPickStore.strikeMapFrom(lines)
+		for ((key, score) in strikes) {
+			if (score >= ProxyPoolPickStore.STRIKE_REMOVE_AT && key in picks) {
+				excludedDeadPicks += key
+			}
+		}
+	}
+
+	/** A key -> entry lookup back through the current candidate set; null
+	 *  when the key came from a ledger for a proxy we no longer carry. */
+	private fun entryForKey(key: String): ProxyListFetcher.ProxyEntry? =
+		candidates.firstOrNull { proxyKeyOf(it) == key }
+
+	private fun persistBan(key: String) {
+		val entry = entryForKey(key) ?: return
+		val ctx = contextRef?.get() ?: return
+		scope.launch { ProxyPoolPickStore.ban(ctx.cacheDir, entry) }
+	}
+
+	private fun persistFailureStrike(key: String) {
+		// manual lines are not strike-tracked: a credentialled check failing
+		// without credentials says nothing about the proxy itself
+		if (key in manualLines) return
+		val isPick = key in pickedKeys
+		val entry = entryForKey(key) ?: return
+		val ctx = contextRef?.get() ?: return
+		scope.launch {
+			val score = ProxyPoolPickStore.recordStrike(ctx.cacheDir, entry)
+			if (score >= ProxyPoolPickStore.STRIKE_REMOVE_AT) {
+				if (isPick) {
+					// 5e: never REMOVED from the file, just out of auto use
+					excludedDeadPicks += key
+				} else {
+					droppedProxyKeys += key
+				}
+			}
+		}
+	}
+
+	private fun persistStrikeClear(key: String) {
+		val entry = entryForKey(key) ?: return
+		val ctx = contextRef?.get() ?: return
+		scope.launch { ProxyPoolPickStore.clearStrike(ctx.cacheDir, entry) }
+	}
+
+	/** Pokemon route-level view of the 10c selection modes: Direct is
+	 *  never filtered (it is the fail-open tail), picks/manually queue
+	 *  ahead or exclusive. */
+	private fun applySelectionMode(routes: List<RoutePlan>): List<RoutePlan> {
+		return when (settingsRef?.poolSelectionMode ?: PoolSelectionMode.AUTO) {
+			PoolSelectionMode.AUTO -> routes
+			PoolSelectionMode.SELECTED_FIRST -> routes.sortedByDescending { routeIsPick(it) }
+			PoolSelectionMode.SELECTED_ONLY -> routes.filter { it == RoutePlan.Direct || routeIsPick(it) }
+		}
+	}
+
+	private fun routeIsPick(route: RoutePlan): Boolean {
+		val key = routeProxyKey(route) ?: return false
+		return key in pickedKeys || key in manualLines
+	}
+
+	/** Public: every ledger view the settings/list screens need. */
+	fun pickedCount(): Int = pickedKeys.size
+
+	fun manualCount(): Int = manualLines.size
+
+	fun isPickedKey(key: String): Boolean = key in pickedKeys || key in manualLines
+
+	/** Pick/unpick an entry (5d): writes the ledger and refreshes the
+	 *  in-memory views. The next refresh keeps it regardless. */
+	fun setPicked(entry: ProxyListFetcher.ProxyEntry, picked: Boolean) {
+		val ctx = contextRef?.get() ?: return
+		scope.launch {
+			if (picked) {
+				val line = ProxyPoolPickStore.Line(ProxyPoolPickStore.LineKind.PICKED, "").apply {
+					scheme = entry.scheme; host = entry.host; port = entry.port
+				}
+				ProxyPoolPickStore.upsert(ctx.cacheDir, line)
+			} else {
+				ProxyPoolPickStore.remove(ctx.cacheDir, ProxyPoolPickStore.LineKind.PICKED, entry.toString())
+			}
+			applyLedger(ProxyPoolPickStore.load(ctx.cacheDir))
+		}
+	}
+
+	/** Add-free-form manual entries (5e/add-by-paste): one per line as
+	 *  "scheme host port [login [pass]]". Returns how many were accepted. */
+	fun addManualPasted(text: String): Int {
+		val ctx = contextRef?.get() ?: return 0
+		var accepted = 0
+		for (raw in text.lineSequence()) {
+			val t = raw.trim()
+			if (t.isEmpty()) continue
+			val parts = t.split(Regex("\\s+"))
+			if (parts.size < 3) continue
+			val scheme = ProxyListFetcher.parseSchemeWord(parts[0]) ?: continue
+			val port = parts[2].toIntOrNull()?.takeIf { it in 1..65535 } ?: continue
+			accepted++
+			ProxyPoolPickStore.mutate(ctx.cacheDir) { lines ->
+				lines.add(ProxyPoolPickStore.Line(ProxyPoolPickStore.LineKind.MANUAL, raw).apply {
+					this.scheme = scheme
+					host = parts[1]
+					this.port = port
+					if (parts.size >= 4) login = parts[3]
+					if (parts.size >= 5) password = parts[4]
+				})
+			}
+		}
+		val ctx2 = contextRef?.get()
+		if (accepted > 0 && ctx2 != null) {
+			applyLedger(ProxyPoolPickStore.load(ctx2.cacheDir))
+		}
+		return accepted
+	}
+
+	fun removeManual(key: String) {
+		val ctx = contextRef?.get() ?: return
+		scope.launch {
+			ProxyPoolPickStore.remove(ctx.cacheDir, ProxyPoolPickStore.LineKind.MANUAL, key)
+			applyLedger(ProxyPoolPickStore.load(ctx.cacheDir))
+		}
+	}
+
+	// endregion
 
 	private fun proxyKeyOf(entry: ProxyListFetcher.ProxyEntry): String = entry.toString()
 

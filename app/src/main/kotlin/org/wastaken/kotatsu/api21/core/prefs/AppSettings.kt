@@ -31,6 +31,8 @@ import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_MAX_HEALTHY_CAP
 import org.wastaken.kotatsu.api21.core.network.proxypool.PoolCertChecks
 import org.wastaken.kotatsu.api21.core.network.proxypool.PoolCfCookies
 import org.wastaken.kotatsu.api21.core.network.proxypool.PoolFetchLists
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolPickedRole
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolSelectionMode
 import org.wastaken.kotatsu.api21.core.network.proxypool.PoolCookiesMode
 import org.wastaken.kotatsu.api21.core.network.proxypool.PoolMode
 import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyHealthChecker
@@ -744,6 +746,23 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 			prefs.getEnumValue(KEY_POOL_FETCH_VIA, PoolFetchLists.IF_DIRECT_FAILS)
 		}.getOrDefault(PoolFetchLists.IF_DIRECT_FAILS)
 
+	/** Amendment 5 5c: how pool/chain routes are picked. AUTO (default) =
+	 *  round-robin over the healthy set, exactly like before; SELECTED_FIRST
+	 *  = picked proxies queue ahead of everything else; SELECTED_ONLY = only
+	 *  picked/manual entries may ride. Values persist by NAME (getEnumValue). */
+	val poolSelectionMode: PoolSelectionMode
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_SELECTION_MODE, PoolSelectionMode.AUTO)
+		}.getOrDefault(PoolSelectionMode.AUTO)
+
+	/** Amendment 5 5c: slot restriction for picked proxies in chains.
+	 *  ANY (default) = free use; ENTRY = picks prefer the hop-1/middle
+	 *  slots; EXIT = picks prefer the exit (target-facing) hop. */
+	val poolPickedRole: PoolPickedRole
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_PICKED_ROLE, PoolPickedRole.ANY)
+		}.getOrDefault(PoolPickedRole.ANY)
+
 	/** Amendment 5 item 5a: plain HTTP rides the pool too. Default On
 	 *  (not restricted); Off keeps the pre-amendment HTTPS-only shape. */
 	val poolPlainHttp: Boolean
@@ -1163,6 +1182,8 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 
 		const val KEY_POOL_CHAIN_LENGTH = "pool_chain_length"
 		const val KEY_POOL_FETCH_VIA = "pool_fetch_via"
+		const val KEY_POOL_SELECTION_MODE = "pool_selection_mode"
+		const val KEY_POOL_PICKED_ROLE = "pool_picked_role"
 
 		// Amendment 5: restrictions became switches (default = not restricted)
 		const val KEY_POOL_PLAIN_HTTP = "pool_plain_http"

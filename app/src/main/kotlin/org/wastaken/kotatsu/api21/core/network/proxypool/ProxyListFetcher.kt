@@ -73,6 +73,16 @@ object ProxyListFetcher {
 		override fun toString(): String = "$scheme:$host:$port"
 	}
 
+	/** The scheme words used by our own ledger/status files (the remote
+	 *  line formats keep their own parsers): http/socks4/socks5,
+	 *  case-insensitive. */
+	fun parseSchemeWord(word: String): Scheme? = when (word.lowercase()) {
+		"http" -> Scheme.HTTP
+		"socks4" -> Scheme.SOCKS4
+		"socks5" -> Scheme.SOCKS5
+		else -> null
+	}
+
 	data class ListReport(
 		val listUrl: String,
 		val source: ListSource,
@@ -89,8 +99,7 @@ object ProxyListFetcher {
 		val reports: List<ListReport>,
 	)
 
-	const val POOL_DEFAULT_MIRRORS =
-		"https://cdn.jsdelivr.net/gh/TheSpeedX/SOCKS-List@master/http.txt\n" +
+	const val POOL_DEFAULT_MIRRORS =		"https://cdn.jsdelivr.net/gh/TheSpeedX/SOCKS-List@master/http.txt\n" +
 			"https://cdn.jsdelivr.net/gh/TheSpeedX/SOCKS-List@master/socks5.txt\n" +
 			"https://cdn.jsdelivr.net/gh/monosans/proxy-list@main/proxies/all.txt"
 
