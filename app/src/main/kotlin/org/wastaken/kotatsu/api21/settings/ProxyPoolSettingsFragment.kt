@@ -122,7 +122,62 @@ class ProxyPoolSettingsFragment : BasePreferenceFragment(R.string.proxy_pool),
 			true
 		}
 
+		KEY_OPEN_LIST -> {
+			startActivity(android.content.Intent(requireContext(), org.wastaken.kotatsu.api21.settings.pool.ProxyPoolListActivity::class.java))
+			true
+		}
+
+		KEY_ADD_MANUAL -> {
+			promptAddManual()
+			true
+		}
+
+		KEY_CLEAR_BANS -> {
+			org.wastaken.kotatsu.api21.core.ui.dialog.buildAlertDialog(requireContext(), isCentered = true) {
+				setTitle(R.string.pool_clear_bans_title)
+				setMessage(R.string.pool_clear_bans_summary)
+				setPositiveButton(android.R.string.ok) { _, _ ->
+					ProxyPoolController.clearBans()
+					updateStatusSummary()
+				}
+				setNegativeButton(android.R.string.cancel, null)
+			}
+			true
+		}
+
 		else -> super.onPreferenceTreeClick(preference)
+	}
+
+	/** Paste box for manual proxies (5e): free-form lines
+	 *  "scheme host port [login password]"; loopback allowed (local Tor);
+	 *  credentials are written to the cache-dir ledger only, never sent
+	 *  anywhere outside requests that legitimately belong to the proxy. */
+	private fun promptAddManual() {
+		val ctx = requireContext()
+		val input = android.widget.EditText(ctx).apply {
+			minLines = 4
+			gravity = android.view.Gravity.TOP
+			inputType = android.text.InputType.TYPE_CLASS_TEXT or
+				android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+			hint = "socks5 127.0.0.1 9050\nhttp proxy.internal 8080 user pass"
+		}
+		val pad = (16 * resources.displayMetrics.density).toInt()
+		org.wastaken.kotatsu.api21.core.ui.dialog.buildAlertDialog(ctx, isCentered = true) {
+			setTitle(R.string.pool_add_manual_title)
+			val frame = android.widget.FrameLayout(ctx).apply {
+				setPadding(pad, 0, pad, 0)
+				addView(input)
+			}
+			setView(frame)
+			setPositiveButton(android.R.string.ok) { _, _ ->
+				val accepted = ProxyPoolController.addManualPasted(input.text.toString())
+				android.widget.Toast.makeText(
+					ctx, "accepted $accepted manual lines", android.widget.Toast.LENGTH_SHORT,
+				).show()
+				updateStatusSummary()
+			}
+			setNegativeButton(android.R.string.cancel, null)
+		}
 	}
 
 	override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
@@ -149,12 +204,34 @@ class ProxyPoolSettingsFragment : BasePreferenceFragment(R.string.proxy_pool),
 		findPreference<Preference>(AppSettings.KEY_POOL_TIMEOUT_CHAIN_S)?.isEnabled = enabled
 		findPreference<Preference>(AppSettings.KEY_POOL_FORBIDDEN_HOSTS)?.isEnabled = enabled
 		findPreference<Preference>(AppSettings.KEY_POOL_CERT_CHECKS)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_CHAIN_LENGTH)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_FETCH_VIA)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_SELECTION_MODE)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_PICKED_ROLE)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_PLAIN_HTTP)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_SKIP_LOGIN_HOSTS)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_CAT_SOURCES)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_CAT_VIDEO)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_CAT_SERVICES)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_CF_COOKIES)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_COOKIES_MODE)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_ALWAYS_HOSTS)?.isEnabled = enabled
 		findPreference<Preference>(KEY_STATUS)?.isEnabled = enabled
+		findPreference<Preference>(KEY_OPEN_LIST)?.isEnabled = enabled
+		findPreference<Preference>(KEY_ADD_MANUAL)?.isEnabled = enabled
+		findPreference<Preference>(KEY_CLEAR_BANS)?.isEnabled = enabled
 	}
 
 	private fun updateStatusSummary() {
 		findPreference<Preference>(KEY_STATUS)?.summary =
 			ProxyPoolController.statusLine(settings.poolMode)
+		findPreference<Preference>(KEY_CHAIN_PREVIEW)?.summary =
+			ProxyPoolController.chainPreviewLine()
+		findPreference<Preference>(KEY_CLEAR_BANS)?.summary =
+			getString(R.string.pool_clear_bans_summary) + " (" + ProxyPoolController.bannedCount() + " banned)"
+		findPreference<Preference>(KEY_OPEN_LIST)?.summary =
+			getString(R.string.pool_open_list_summary) + " (@${ProxyPoolController.status.healthy.size} alive, +" +
+				ProxyPoolController.pickedCount() + " picked, " + ProxyPoolController.manualCount() + " manual)"
 	}
 
 	private fun watchStatus() {
@@ -173,5 +250,9 @@ class ProxyPoolSettingsFragment : BasePreferenceFragment(R.string.proxy_pool),
 	companion object {
 		// Key shares no storage: pool_status is non-persistent in the XML
 		private const val KEY_STATUS = "pool_status"
+		private const val KEY_OPEN_LIST = "pool_open_list"
+		private const val KEY_ADD_MANUAL = "pool_add_manual"
+		private const val KEY_CLEAR_BANS = "pool_clear_bans"
+		private const val KEY_CHAIN_PREVIEW = "pool_chain_preview"
 	}
 }

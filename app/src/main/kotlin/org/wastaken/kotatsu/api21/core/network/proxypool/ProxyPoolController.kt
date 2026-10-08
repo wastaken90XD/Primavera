@@ -1087,16 +1087,17 @@ object ProxyPoolController {
 							chainHealthy = chainReport.healthy
 							val healthyKeys = chainReport.healthy
 								.mapTo(HashSet()) { proxyKeyOf(it.entry) }
-							rebindChainSet(
-								r,
-								routeMap.filterKeys { it in healthyKeys },
-							)
+							val bound = routeMap.filterKeys { it in healthyKeys }
+							rebindChainSet(r, bound)
+							updateChainPreview(bound, s.poolChainLength)
 						}
 					} else {
 						chainHealthy = emptyList()
+						updateChainPreview(emptyMap(), s.poolChainLength)
 					}
 				} else {
 					chainHealthy = emptyList()
+					updateChainPreview(emptyMap(), s.poolChainLength)
 				}
 				maybeStopRelay()
 
@@ -1610,6 +1611,144 @@ object ProxyPoolController {
 	fun relayPortOrNull(): Int? = relay?.takeIf { it.isRunning }?.port
 
 	fun relayAuthHeaderOrNull(): String? = relay?.takeIf { it.isRunning }?.buildAuthHeader()
+
+	// region list screen support (amendment 5 10d)
+
+	/** The last assembled route preview ("hop1,hop2 -> target"); set at
+	 *  every refresh/re-bind so the settings UI can show exactly what a
+	 *  request's chain would look like right now. Empty => no chains. */
+	@Volatile
+	private var chainPreviewText: String = ""
+
+	fun chainPreviewLine(): String = chainPreviewText
+
+	private fun updateChainPreview(routes: Map<String, ProxyChainRelay.Route>, chainLength: Int) {
+		val first = routes.values.firstOrNull()
+		chainPreviewText = when {
+			first == null ->
+				"No chains right now (length $chainLength; add picks or wait for healthy candidates)"
+
+			else -> "${first.hops.joinToString(" → ") { it.host }} → target (${routes.size} routes ready)"
+		}
+	}
+
+	/** Disk-backed rows for the list screen: every candidate the engine
+	 *  knows (refreshed lists UNION picks/manual), annotated with its
+	 *  ledger state. The screen pages over this list; the candidate set
+	 *  itself already came from the file + refresh, no hidden state. */
+	data class PoolRow(
+		val entry: ProxyListFetcher.ProxyEntry,
+		val key: String,
+		val isPicked: Boolean,
+		val isManual: Boolean,
+		val isBanned: Boolean,
+		val isAliveNow: Boolean,
+		val isDroppedNow: Boolean,
+		val strikes: Int,
+		val latencyMs: Long?,
+	)
+
+	fun poolRowsSnapshot(): List<PoolRow> {
+		val alive = status.healthy.associateBy({ proxyKeyOf(it.entry) }, { it.latencyMs })
+		val all = LinkedHashMap<String, ProxyListFetcher.ProxyEntry>()
+		candidates.forEach { all[proxyKeyOf(it)] = it }
+		// picks/manual not in the current candidate window still appear
+		// (cold start before the first refresh: the ledger is the truth)
+		val ctx = contextRef?.get()
+		val lines = ctx?.let { ProxyPoolPickStore.load(it.cacheDir) } ?: emptyList()
+		for (line in lines) {
+			if (line.kind == ProxyPoolPickStore.LineKind.PICKED ||
+				line.kind == ProxyPoolPickStore.LineKind.MANUAL
+			) {
+				all.putIfAbsent(line.key, line.entry())
+			}
+		}
+		val strikes = ctx?.let { ProxyPoolPickStore.strikeMap(it.cacheDir) } ?: emptyMap()
+		return all.map { (key, entry) ->
+			PoolRow(
+				entry = entry,
+				key = key,
+				isPicked = key in pickedKeys,
+				isManual = key in manualLines,
+				isBanned = key in bannedProxyKeys,
+				isAliveNow = key in alive,
+				isDroppedNow = key in droppedProxyKeys || key in excludedDeadPicks,
+				strikes = strikes[key] ?: 0,
+				latencyMs = alive[key],
+			)
+		}
+	}
+
+	/** Resolve one ledger key to an entry the store knows (for UI-driven
+	 *  ban/unban/pick/unpick actions on rows that fell out of the current
+	 *  candidate window). */
+	fun entryForLedgerKey(key: String): ProxyListFetcher.ProxyEntry? {
+		entryForKey(key)?.let { return it }
+		val ctx = contextRef?.get() ?: return null
+		return ProxyPoolPickStore.load(ctx.cacheDir).firstOrNull { it.key == key }?.entry()
+	}
+
+	fun banKey(key: String) {
+		val entry = entryForLedgerKey(key) ?: return
+		if (bannedProxyKeys.add(key)) {
+			val ctx = contextRef?.get() ?: return
+			scope.launch { ProxyPoolPickStore.ban(ctx.cacheDir, entry) }
+		}
+	}
+
+	fun unbanKey(key: String) {
+		val entry = entryForLedgerKey(key) ?: return
+		if (bannedProxyKeys.remove(key)) {
+			val ctx = contextRef?.get() ?: return
+			scope.launch { ProxyPoolPickStore.unban(ctx.cacheDir, entry) }
+		}
+	}
+
+	fun removePickOrManual(key: String) {
+		val ctx = contextRef?.get() ?: return
+		scope.launch {
+			ProxyPoolPickStore.mutate(ctx.cacheDir) { lines ->
+				lines.removeAll {
+					(it.kind == ProxyPoolPickStore.LineKind.PICKED ||
+						it.kind == ProxyPoolPickStore.LineKind.MANUAL) && it.key == key
+				}
+			}
+			applyLedger(ProxyPoolPickStore.load(ctx.cacheDir))
+		}
+	}
+
+	/** List-screen test action: runs the same direct health pass over the
+	 *  given entries (GET/HEAD probe, challenge-aware) and reports back
+	 *  how many passed. Pure read-only action: no plans change; each
+	 *  failed check feeds the strike score just like a failed request. */
+	fun testEntries(entries: List<ProxyListFetcher.ProxyEntry>, onDone: (passes: Int, total: Int) -> Unit) {
+		val s = settingsRef ?: return onDone(0, entries.size)
+		val base = baseClientRef?.get() ?: return onDone(0, entries.size)
+		scope.launch {
+			val report = ProxyHealthChecker.check(
+				base,
+				entries.distinctBy { proxyKeyOf(it) },
+				s.poolTestUrl,
+				s.poolMaxHealthy.coerceAtLeast(entries.size),
+				s.poolTimeoutDirectS,
+			)
+			val passed = report.healthy.mapTo(HashSet()) { proxyKeyOf(it.entry) }
+			for (e in entries) {
+				val key = proxyKeyOf(e)
+				if (key in passed) {
+					if (excludedDeadPicks.remove(key)) {
+						Log.i(TAG, "list test: proxy passes again, dead-shelf cleared ($key)")
+					}
+					persistStrikeClear(key)
+				} else {
+					persistFailureStrike(key)
+				}
+			}
+			onDone(report.healthy.size, entries.size)
+		}
+	}
+
+	// endregion
 
 	private val DIRECT_PLAN = listOf(RoutePlan.Direct)
 }

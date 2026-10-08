@@ -358,14 +358,87 @@
 		<item>Off</item>
 		<item>@string/pool_mode_fallback</item>
 		<item>@string/pool_mode_always</item>
-		<item>@string/pool_mode_chained</item>
 	</string-array>
 
 	<string-array name="values_proxy_pool_modes" translatable="false">
 		<item>OFF</item>
 		<item>FALLBACK</item>
 		<item>ALWAYS</item>
-		<item>CHAINED</item>
+	</string-array>
+
+	<string-array name="pool_cert_checks_modes" translatable="false">
+		<item>@string/pool_cert_checks_follow_app</item>
+		<item>@string/pool_cert_checks_verify</item>
+		<item>@string/pool_cert_checks_ignore</item>
+	</string-array>
+	<string-array name="values_pool_cert_checks_modes" translatable="false">
+		<item>FOLLOW_APP</item>
+		<item>ALWAYS_VERIFY</item>
+		<item>ALWAYS_IGNORE</item>
+	</string-array>
+
+	<string-array name="pool_cf_cookies_modes" translatable="false">
+		<item>Strip</item>
+		<item>Send</item>
+	</string-array>
+	<string-array name="values_pool_cf_cookies_modes" translatable="false">
+		<item>STRIP</item>
+		<item>SEND</item>
+	</string-array>
+
+	<string-array name="pool_cookies_modes" translatable="false">
+		<item>@string/pool_cookies_mode_auto</item>
+		<item>Send</item>
+		<item>Strip</item>
+	</string-array>
+	<string-array name="values_pool_cookies_modes" translatable="false">
+		<item>AUTO</item>
+		<item>SEND</item>
+		<item>STRIP</item>
+	</string-array>
+
+	<string-array name="pool_fetch_via_modes" translatable="false">
+		<item>@string/pool_fetch_via_never</item>
+		<item>@string/pool_fetch_via_if_direct_fails</item>
+		<item>Always</item>
+	</string-array>
+	<string-array name="values_pool_fetch_via_modes" translatable="false">
+		<item>NEVER</item>
+		<item>IF_DIRECT_FAILS</item>
+		<item>ALWAYS</item>
+	</string-array>
+
+	<string-array name="pool_selection_modes" translatable="false">
+		<item>Auto</item>
+		<item>@string/pool_selection_mode_first</item>
+		<item>@string/pool_selection_mode_only</item>
+	</string-array>
+	<string-array name="values_pool_selection_modes" translatable="false">
+		<item>AUTO</item>
+		<item>SELECTED_FIRST</item>
+		<item>SELECTED_ONLY</item>
+	</string-array>
+
+	<string-array name="pool_picked_roles" translatable="false">
+		<item>Any</item>
+		<item>@string/pool_picked_role_entry</item>
+		<item>Exit</item>
+	</string-array>
+	<string-array name="values_pool_picked_roles" translatable="false">
+		<item>ANY</item>
+		<item>ENTRY</item>
+		<item>EXIT</item>
+	</string-array>
+
+	<string-array name="pool_chain_lengths" translatable="false">
+		<item>1</item>
+		<item>2</item>
+		<item>3</item>
+	</string-array>
+	<string-array name="values_pool_chain_lengths" translatable="false">
+		<item>1</item>
+		<item>2</item>
+		<item>3</item>
 	</string-array>
 
 </resources>

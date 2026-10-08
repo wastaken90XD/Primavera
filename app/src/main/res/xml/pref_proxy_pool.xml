@@ -24,6 +24,49 @@
 		android:persistent="false"
 		android:title="@string/pool_status_title" />
 
+	<Preference
+		android:key="pool_chain_preview"
+		android:persistent="false"
+		android:title="@string/pool_chain_preview_title" />
+
+	<Preference
+		android:key="pool_open_list"
+		android:persistent="false"
+		android:summary="@string/pool_open_list_summary"
+		android:title="@string/pool_open_list_title" />
+
+	<Preference
+		android:key="pool_add_manual"
+		android:persistent="false"
+		android:summary="@string/pool_add_manual_summary"
+		android:title="@string/pool_add_manual_title" />
+
+	<ListPreference
+		android:defaultValue="AUTO"
+		android:entries="@array/pool_selection_modes"
+		android:entryValues="@array/values_pool_selection_modes"
+		android:key="pool_selection_mode"
+		android:summary="@string/pool_selection_mode_summary"
+		android:title="@string/pool_selection_mode_title"
+		app:useSimpleSummaryProvider="false" />
+
+	<ListPreference
+		android:defaultValue="ANY"
+		android:entries="@array/pool_picked_roles"
+		android:entryValues="@array/values_pool_picked_roles"
+		android:key="pool_picked_role"
+		android:summary="@string/pool_picked_role_summary"
+		android:title="@string/pool_picked_role_title" />
+
+	<ListPreference
+		android:defaultValue="2"
+		android:entries="@array/pool_chain_lengths"
+		android:entryValues="@array/values_pool_chain_lengths"
+		android:key="pool_chain_length"
+		android:summary="@string/pool_chain_length_summary"
+		android:title="@string/pool_chain_length_title"
+		app:useSimpleSummaryProvider="false" />
+
 	<EditTextPreference
 		android:key="pool_lists"
 		android:summary="@string/pool_lists_summary"
@@ -33,6 +76,15 @@
 		android:key="pool_mirrors"
 		android:summary="@string/pool_mirror_lists_summary"
 		android:title="@string/pool_mirror_lists_title" />
+
+	<ListPreference
+		android:defaultValue="IF_DIRECT_FAILS"
+		android:entries="@array/pool_fetch_via_modes"
+		android:entryValues="@array/values_pool_fetch_via_modes"
+		android:key="pool_fetch_via"
+		android:summary="@string/pool_fetch_via_summary"
+		android:title="@string/pool_fetch_via_title"
+		app:useSimpleSummaryProvider="false" />
 
 	<EditTextPreference
 		android:key="pool_test_url"
@@ -62,11 +114,73 @@
 		android:summary="@string/pool_forbidden_hosts_summary"
 		android:title="@string/pool_forbidden_hosts_title" />
 
+	<EditTextPreference
+		android:key="pool_always_hosts"
+		android:summary="@string/pool_always_hosts_summary"
+		android:title="@string/pool_always_hosts_title" />
+
+	<ListPreference
+		android:defaultValue="FOLLOW_APP"
+		android:entries="@array/pool_cert_checks_modes"
+		android:entryValues="@array/values_pool_cert_checks_modes"
+		android:key="pool_cert_checks"
+		android:summary="@string/pool_cert_checks_summary"
+		android:title="@string/pool_cert_checks_title"
+		app:allowDividerAbove="true"
+		app:useSimpleSummaryProvider="false" />
+
+	<SwitchPreferenceCompat
+		android:defaultValue="true"
+		android:key="pool_plain_http"
+		android:summary="@string/pool_plain_http_summary"
+		android:title="@string/pool_plain_http_title" />
+
 	<SwitchPreferenceCompat
 		android:defaultValue="false"
-		android:key="pool_insecure_certs"
-		android:summary="@string/pool_insecure_certs_summary"
-		android:title="@string/pool_insecure_certs_title"
-		app:allowDividerAbove="true" />
+		android:key="pool_skip_login_hosts"
+		android:summary="@string/pool_skip_login_hosts_summary"
+		android:title="@string/pool_skip_login_hosts_title" />
+
+	<SwitchPreferenceCompat
+		android:defaultValue="true"
+		android:key="pool_cat_sources"
+		android:summary="@string/pool_cat_sources_summary"
+		android:title="@string/pool_cat_sources_title" />
+
+	<SwitchPreferenceCompat
+		android:defaultValue="true"
+		android:key="pool_cat_video"
+		android:summary="@string/pool_cat_video_summary"
+		android:title="@string/pool_cat_video_title" />
+
+	<SwitchPreferenceCompat
+		android:defaultValue="true"
+		android:key="pool_cat_services"
+		android:summary="@string/pool_cat_services_summary"
+		android:title="@string/pool_cat_services_title" />
+
+	<ListPreference
+		android:defaultValue="STRIP"
+		android:entries="@array/pool_cf_cookies_modes"
+		android:entryValues="@array/values_pool_cf_cookies_modes"
+		android:key="pool_cf_cookies"
+		android:summary="@string/pool_cf_cookies_summary"
+		android:title="@string/pool_cf_cookies_title"
+		app:useSimpleSummaryProvider="false" />
+
+	<ListPreference
+		android:defaultValue="AUTO"
+		android:entries="@array/pool_cookies_modes"
+		android:entryValues="@array/values_pool_cookies_modes"
+		android:key="pool_cookies_mode"
+		android:summary="@string/pool_cookies_mode_summary"
+		android:title="@string/pool_cookies_mode_title"
+		app:useSimpleSummaryProvider="false" />
+
+	<Preference
+		android:key="pool_clear_bans"
+		android:persistent="false"
+		android:summary="@string/pool_clear_bans_summary"
+		android:title="@string/pool_clear_bans_title" />
 
 </PreferenceScreen>

@@ -270,6 +270,9 @@
 			android:name="org.wastaken.kotatsu.api21.alternatives.ui.AlternativesActivity"
 			android:label="@string/alternatives" />
 		<activity
+			android:name="org.wastaken.kotatsu.api21.settings.pool.ProxyPoolListActivity"
+			android:label="@string/pool_open_list_title" />
+		<activity
 			android:name="org.wastaken.kotatsu.api21.core.crash.CrashReportActivity"
 			android:label="@string/crash_report_title"
 			android:excludeFromRecents="true" />
