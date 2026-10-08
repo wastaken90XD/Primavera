@@ -60,23 +60,29 @@ import java.io.IOException
  * (every tier keeps proxyProvider.selector regardless).
  */
 class PoolRoutingInterceptor(
-	@Suppress("unused") private val settings: AppSettings,
+	private val settings: AppSettings,
 	private val tier: ProxyPoolController.PoolTier,
 ) : Interceptor {
 
 	override fun intercept(chain: Interceptor.Chain): Response {
 		val request = chain.request()
-		if (tier == ProxyPoolController.PoolTier.VIDEO) {
-			// Task-B invariant: the pool never plays media. Present on the
-			// video tier per the 6/7 spec's per-tier install; inert by tier.
-			return chain.proceed(request)
-		}
 		val mode = ProxyPoolController.effectiveMode()
-		if (mode == PoolMode.OFF || ProxyPoolController.isInert()) {
+		if (mode == PoolMode.OFF) {
 			return chain.proceed(request)
 		}
-		if (request.url.scheme != "https") {
-			return chain.proceed(request) // pool carries HTTPS only
+		// amendment 5 item 5: the category switches replace the hard
+		// exclusions - every tier participates unless its switch says no
+		val categoryOn = when (tier) {
+			ProxyPoolController.PoolTier.BASE -> settings.poolCatServices
+			ProxyPoolController.PoolTier.MANGA -> settings.poolCatSources
+			ProxyPoolController.PoolTier.VIDEO -> settings.poolCatVideo
+		}
+		if (!categoryOn) {
+			return chain.proceed(request)
+		}
+		// plain HTTP rides the pool only when the dedicated switch is on
+		if (request.url.scheme != "https" && !settings.poolPlainHttp) {
+			return chain.proceed(request)
 		}
 		val host = request.url.host.lowercase()
 		val plan = ProxyPoolController.planFor(host, mode)
@@ -122,12 +128,16 @@ class PoolRoutingInterceptor(
 				is ProxyPoolController.RoutePlan.ViaChain,
 				-> {
 					proxiedAttempts++
-					// AUTO COOKIE rule: once any attempt of this request has
-					// failed or been challenged, pooled retries go anonymous -
-					// the retry is sent without the Cookie header, exactly
-					// once, and the shared jar / strip verb never touch the
-					// direct path's request object
-					val outbound = if (retried && request.header("Cookie") != null) {
+					// amendment 5: "Cookies on proxied requests" wheel -
+					// STRIP always strips on pooled attempts (the request
+					// COPY only - the direct path's request object is never
+					// touched); SEND never strips; AUTO keeps the 10a rule:
+					// once any attempt of this request has failed or been
+					// challenged, pooled retries go anonymous, exactly once
+					val stripCookie = request.header("Cookie") != null &&
+						(settings.poolCookiesMode == PoolCookiesMode.STRIP ||
+							(settings.poolCookiesMode == PoolCookiesMode.AUTO && retried))
+					val outbound = if (stripCookie) {
 						request.newBuilder().removeHeader("Cookie").build()
 					} else {
 						request

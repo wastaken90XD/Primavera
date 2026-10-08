@@ -80,6 +80,14 @@ object ProxyListFetcher {
 	)
 
 	/** Mirrors shipped as defaults (fetch_page-verified, same line formats). */
+	const val POOL_DEFAULT_LISTS =
+		"https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&timeout=15000&proxy_format=protocolipport&format=text\n" +
+			"https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=socks4&timeout=15000&proxy_format=protocolipport&format=text\n" +
+			"https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=socks5&timeout=15000&proxy_format=protocolipport&format=text"
+	const val POOL_DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204"
+	const val POOL_DEFAULT_MAX_HEALTHY = 12
+	const val POOL_MAX_HEALTHY_CAP = 20
+
 	const val POOL_DEFAULT_MIRRORS =
 		"https://cdn.jsdelivr.net/gh/TheSpeedX/SOCKS-List@master/http.txt\n" +
 			"https://cdn.jsdelivr.net/gh/TheSpeedX/SOCKS-List@master/socks5.txt\n" +

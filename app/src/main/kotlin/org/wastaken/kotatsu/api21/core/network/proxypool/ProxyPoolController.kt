@@ -576,12 +576,20 @@ object ProxyPoolController {
 				} else {
 					if (route is RoutePlan.ViaChain && relay?.isRunning != true) {
 						// relay died between attempt and report: rebuild it
-						// (bind-time rebind) and take NO ledger mark - the
-						// proxy is not at fault for our own lifecycle
-						val gwNow = gateway
-						val r = gwNow?.let { ensureRelay() }
-						if (r != null && gwNow != null) {
-							rebindChainSet(r, gwNow, chainHealthy)
+						// (bind-time rebind of the CURRENT chain set) and take
+						// NO ledger mark - the proxy is not at fault for our
+						// own lifecycle
+						val s = settingsRef
+						val r = s?.let { ensureRelay() }
+						if (r != null && s != null) {
+							val routeMap = buildChainCandidates(
+								chainHealthy.map { it.entry },
+								status.healthy,
+								staticProxyHop(s),
+								s.poolChainLength,
+								s.poolMaxHealthy * 3,
+							)
+							rebindChainSet(r, routeMap)
 						}
 						Log.i(TAG, "chain attempt outcome ignored: relay was not running (restarted=${r != null})")
 						return
@@ -910,7 +918,7 @@ object ProxyPoolController {
 						)
 					}
 				}
-				if (listsResult == null || listsResult.entries.isEmpty()) {
+				if (listsResult.let { it == null || it.entries.isEmpty() }) {
 					listsResult = ProxyListFetcher.fetchLists(
 						// the cycle's transport is a HARD-LOCKED direct clone
 						// of the base client: list downloads never cross the
@@ -925,7 +933,7 @@ object ProxyPoolController {
 						ctx.cacheDir,
 					)
 				}
-				if (fetchMode == PoolFetchLists.IF_DIRECT_FAILS && listsResult.entries.isEmpty()) {
+				if (fetchMode == PoolFetchLists.IF_DIRECT_FAILS && listsResult.let { it == null || it.entries.isEmpty() }) {
 					fetchProxyTransportOrNull(base)?.let { transport ->
 						Log.i(TAG, "list bootstrap: direct+disk+mirror produced 0 candidates; one pass through a proxy")
 						listsResult = relabelProxyPass(
@@ -933,9 +941,16 @@ object ProxyPoolController {
 						)
 					}
 				}
-				candidates = listsResult.entries
+				val lists = listsResult
+				if (lists == null) {
+					// unreachable by construction (at least the direct pass
+					// always runs) - armed for the next reader of this block
+					status = status.copy(refreshing = false)
+					return@launch
+				}
+				candidates = lists.entries
 				val report = ProxyHealthChecker.check(
-					base, listsResult.entries, s.poolTestUrl, s.poolMaxHealthy, s.poolTimeoutDirectS,
+					base, lists.entries, s.poolTestUrl, s.poolMaxHealthy, s.poolTimeoutDirectS,
 				)
 				if (report.error == null) {
 					ProxyHealthChecker.saveToCache(ctx.cacheDir, report)
@@ -947,10 +962,10 @@ object ProxyPoolController {
 				// found healthy proxies filling the rest. The end-to-end
 				// route is what gets chained-probed through the relay.
 				var chainReport: ProxyHealthChecker.HealthReport? = null
-				if (s.poolChainLength >= 2 && listsResult.entries.isNotEmpty()) {
+				if (s.poolChainLength >= 2 && lists.entries.isNotEmpty()) {
 					val staticHop = staticProxyHop(s)
 					val routeMap = buildChainCandidates(
-						listsResult.entries,
+						lists.entries,
 						report.healthy,
 						staticHop,
 						s.poolChainLength,

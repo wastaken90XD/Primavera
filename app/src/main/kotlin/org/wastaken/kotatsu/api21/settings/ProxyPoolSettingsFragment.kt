@@ -148,7 +148,7 @@ class ProxyPoolSettingsFragment : BasePreferenceFragment(R.string.proxy_pool),
 		findPreference<Preference>(AppSettings.KEY_POOL_TIMEOUT_DIRECT_S)?.isEnabled = enabled
 		findPreference<Preference>(AppSettings.KEY_POOL_TIMEOUT_CHAIN_S)?.isEnabled = enabled
 		findPreference<Preference>(AppSettings.KEY_POOL_FORBIDDEN_HOSTS)?.isEnabled = enabled
-		findPreference<Preference>(AppSettings.KEY_POOL_INSECURE_CERTS)?.isEnabled = enabled
+		findPreference<Preference>(AppSettings.KEY_POOL_CERT_CHECKS)?.isEnabled = enabled
 		findPreference<Preference>(KEY_STATUS)?.isEnabled = enabled
 	}
 

@@ -416,7 +416,7 @@ class ProxyChainRelay(
 		val needsAuth = username != null
 		// greeting/auth phase failures on a SOCKS5 MAIN are "main handshake
 		// failed" (amendment 9); on a gateway they fold into GATEWAY_REFUSED
-		val handshakeFailure = if (isMain) HopFailure.MAIN_HANDSHAKE_FAILED else failure
+		val handshakeFailure = if (isMain) HopFailure.HOP_HANDSHAKE_FAILED else failure
 		val greet = if (needsAuth) byteArrayOf(0x05, 0x02, 0x00, 0x02) else byteArrayOf(0x05, 0x01, 0x00)
 		output.write(greet)
 		output.flush()
