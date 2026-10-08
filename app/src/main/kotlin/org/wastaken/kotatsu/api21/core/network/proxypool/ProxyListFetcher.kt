@@ -45,6 +45,16 @@ import java.util.concurrent.TimeUnit
  * and the two jsDelivr mirror projects, recorded in the 2/7 commit
  * message); the jsDelivr forms ship as the default mirror set below.
  */
+	// settings defaults live at top level so AppSettings can import them
+	// unqualified (compile fix 539a99f: they were object-scoped)
+	const val POOL_DEFAULT_LISTS =
+		"https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&timeout=15000&proxy_format=protocolipport&format=text\n" +
+			"https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=socks4&timeout=15000&proxy_format=protocolipport&format=text\n" +
+			"https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=socks5&timeout=15000&proxy_format=protocolipport&format=text"
+	const val POOL_DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204"
+	const val POOL_DEFAULT_MAX_HEALTHY = 12
+	const val POOL_MAX_HEALTHY_CAP = 20
+
 object ProxyListFetcher {
 
 	private const val MAX_LIST_BYTES = 2L * 1024 * 1024
@@ -78,15 +88,6 @@ object ProxyListFetcher {
 		val entries: List<ProxyEntry>,
 		val reports: List<ListReport>,
 	)
-
-	/** Mirrors shipped as defaults (fetch_page-verified, same line formats). */
-	const val POOL_DEFAULT_LISTS =
-		"https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&timeout=15000&proxy_format=protocolipport&format=text\n" +
-			"https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=socks4&timeout=15000&proxy_format=protocolipport&format=text\n" +
-			"https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=socks5&timeout=15000&proxy_format=protocolipport&format=text"
-	const val POOL_DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204"
-	const val POOL_DEFAULT_MAX_HEALTHY = 12
-	const val POOL_MAX_HEALTHY_CAP = 20
 
 	const val POOL_DEFAULT_MIRRORS =
 		"https://cdn.jsdelivr.net/gh/TheSpeedX/SOCKS-List@master/http.txt\n" +
