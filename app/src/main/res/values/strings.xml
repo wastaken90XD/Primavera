@@ -1164,6 +1164,7 @@
 	<string name="pool_added_format">Added %1$d manual proxies</string>
 	<string name="pool_test_result_format">%1$d of %2$d passed the check</string>
 	<string name="pool_nothing_to_test">Nothing to test in this view</string>
+	<string name="refresh">Refresh</string>
 	<string name="pool_insecure_certs_title">Ignore certificate errors on proxied requests</string>
 	<string name="pool_insecure_certs_summary">Disables TLS certificate checks ONLY on pool-proxied requests. Direct traffic is unaffected. Testing only.</string>
 	<string name="pool_status_title">Pool status (tap to refresh)</string>
