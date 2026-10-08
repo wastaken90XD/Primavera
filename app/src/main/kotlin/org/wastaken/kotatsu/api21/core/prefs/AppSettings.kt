@@ -24,7 +24,33 @@ import org.wastaken.kotatsu.api21.R
 import org.wastaken.kotatsu.api21.core.model.ZoomMode
 import org.wastaken.kotatsu.api21.core.network.DoHProvider
 import org.wastaken.kotatsu.api21.core.network.proxy.ProxyType
+import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_LISTS
+import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_MAX_HEALTHY
+import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_DEFAULT_TEST_URL
+import org.wastaken.kotatsu.api21.core.network.proxypool.POOL_MAX_HEALTHY_CAP
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolCertChecks
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolCfCookies
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolFetchLists
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolPickedRole
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolSelectionMode
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolCookiesMode
+import org.wastaken.kotatsu.api21.core.network.proxypool.PoolMode
+import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyHealthChecker
+import org.wastaken.kotatsu.api21.core.network.proxypool.ProxyListFetcher
 import org.wastaken.kotatsu.api21.core.util.ext.connectivityManager
+import org.wastaken.kotatsu.api21.booru.media.AspectRatioMode
+import org.wastaken.kotatsu.api21.booru.media.BooruLongPressAction
+import org.wastaken.kotatsu.api21.booru.media.BooruHibernateMode
+import org.wastaken.kotatsu.api21.booru.media.BooruVideoEngine
+import org.wastaken.kotatsu.api21.booru.media.DefaultPlayerMode
+import org.wastaken.kotatsu.api21.booru.media.FloatingWindowPosition
+import org.wastaken.kotatsu.api21.booru.media.FloatingWindowSize
+import org.wastaken.kotatsu.api21.booru.media.GifTapAction
+import org.wastaken.kotatsu.api21.booru.media.MediaVideoQuality
+import org.koitharu.kotatsu.parsers.model.MangaSource
+import org.wastaken.kotatsu.api21.reader.ui.media.mediaPlayerDefault
+import org.wastaken.kotatsu.api21.booru.media.RepeatMode
+import org.wastaken.kotatsu.api21.booru.media.VideoTapAction
 import org.wastaken.kotatsu.api21.core.util.ext.getEnumValue
 import org.wastaken.kotatsu.api21.core.util.ext.observeChanges
 import org.wastaken.kotatsu.api21.core.util.ext.putAll
@@ -97,6 +123,127 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 	var gridSizePages: Int
 		get() = prefs.getInt(KEY_GRID_SIZE_PAGES, 100)
 		set(value) = prefs.edit { putInt(KEY_GRID_SIZE_PAGES, value) }
+
+	/** Booru grid column count (2..4, default 3). ListPreference stores it as text. */
+	val booruGridColumns: Int
+		get() = (prefs.getString(KEY_BOORU_GRID_COLUMNS, null)?.toIntOrNull() ?: BOORU_GRID_COLUMNS_DEFAULT)
+			.coerceIn(BOORU_GRID_COLUMNS_MIN, BOORU_GRID_COLUMNS_MAX)
+
+	// region booru media player
+
+	val isMediaBlurThumbnails: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_BLUR_THUMBNAILS, false)
+
+	val mediaBlurIntensity: Int
+		get() = prefs.getInt(KEY_MEDIA_BLUR_INTENSITY, 10).coerceIn(1, 25)
+
+	val mediaGifTapAction: GifTapAction
+		get() = prefs.getEnumValue(KEY_MEDIA_GIF_TAP_ACTION, GifTapAction.INLINE)
+
+	val mediaVideoTapAction: VideoTapAction
+		get() = prefs.getEnumValue(KEY_MEDIA_VIDEO_TAP_ACTION, VideoTapAction.PLAY_IN_APP)
+
+	/** Default video quality for multi-quality videos (rank over the parser's chapter order). */
+	val mediaVideoDefaultQuality: MediaVideoQuality
+		get() = prefs.getEnumValue(KEY_MEDIA_VIDEO_DEFAULT_QUALITY, MediaVideoQuality.BALANCED)
+
+	val mediaDefaultPlayerMode: DefaultPlayerMode
+		get() = prefs.getEnumValue(KEY_MEDIA_DEFAULT_PLAYER_MODE, DefaultPlayerMode.FULLSCREEN)
+
+	val isMediaGifLoop: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_GIF_LOOP, true)
+
+	val isMediaGifFrameControls: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_GIF_FRAME_CONTROLS, false)
+
+	val isMediaVideoLoop: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_VIDEO_LOOP, false)
+
+	/** Stored as text for the settings ListPreference; unpersistable/blend values fall back to 1x. */
+	val mediaDefaultSpeed: Float
+		get() = prefs.getString(KEY_MEDIA_DEFAULT_SPEED, null)?.toFloatOrNull()?.coerceIn(0.5f, 3f) ?: 1f
+
+	/** Skip amount in seconds (5/10/15/30). */
+	val mediaSkipIntervalSec: Int
+		get() = (prefs.getString(KEY_MEDIA_SKIP_INTERVAL, null)?.toIntOrNull() ?: 10)
+			.coerceIn(1, Int.MAX_VALUE)
+
+	val mediaFloatingSize: FloatingWindowSize
+		get() = prefs.getEnumValue(KEY_MEDIA_FLOATING_SIZE, FloatingWindowSize.MEDIUM)
+
+	val mediaFloatingPosition: FloatingWindowPosition
+		get() = prefs.getEnumValue(KEY_MEDIA_FLOATING_POSITION, FloatingWindowPosition.TOP_RIGHT)
+
+	val isMediaFloatingLock: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_FLOATING_LOCK, false)
+
+	val isMediaVolumeGesture: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_VOLUME_GESTURE, true)
+
+	val isMediaBrightnessGesture: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_BRIGHTNESS_GESTURE, true)
+
+	val isMediaPinchZoom: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_PINCH_ZOOM, true)
+
+	val mediaAspectRatio: AspectRatioMode
+		get() = prefs.getEnumValue(KEY_MEDIA_ASPECT_RATIO, AspectRatioMode.FIT)
+
+	var isMediaQueuePersist: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_QUEUE_PERSIST, true)
+		set(value) = prefs.edit { putBoolean(KEY_MEDIA_QUEUE_PERSIST, value) }
+
+	/** Grid tile long-press: immediate download (old behavior), popup menu, or batch selection. */
+	var booruLongPressAction: BooruLongPressAction
+		get() = prefs.getEnumValue(KEY_BOORU_LONG_PRESS_ACTION, BooruLongPressAction.DOWNLOAD)
+		set(value) = prefs.edit { putEnumValue(KEY_BOORU_LONG_PRESS_ACTION, value) }
+
+	/** Video decoder used by the booru media player: embedded libVLC or the platform MediaPlayer. */
+	var booruVideoEngine: BooruVideoEngine
+		get() = prefs.getEnumValue(KEY_BOORU_VIDEO_ENGINE, BooruVideoEngine.EXOPLAYER)
+		set(value) = prefs.edit { putEnumValue(KEY_BOORU_VIDEO_ENGINE, value) }
+
+	/**
+	 * Opt-in engine hibernation while paused + hidden (default NEVER - the user
+	 * decides; timed releases burned live playback on this device before). A
+	 * real STOP always releases immediately regardless of this mode.
+	 */
+	val booruHibernateMode: BooruHibernateMode
+		get() = prefs.getEnumValue(KEY_BOORU_HIBERNATE_MODE, BooruHibernateMode.NEVER)
+
+	/** Streaming cache: payload size of a single .part chunk file, in megabytes. */
+	val booruStreamPartSizeMb: Int
+		get() = prefs.getInt(KEY_BOORU_STREAM_PART_SIZE_MB, 4).coerceIn(2, 16)
+
+	/** Streaming cache: how many .part files are kept; parts x size = the disk budget. */
+	val booruStreamPartCount: Int
+		get() = prefs.getInt(KEY_BOORU_STREAM_PART_COUNT, 6).coerceIn(2, 16)
+
+	/**
+	 * Per-source gate for the built-in media player ("media_player_source_*").
+	 * Default: on for native booru sources, off otherwise.
+	 */
+	fun isMediaPlayerEnabledForSource(source: MangaSource): Boolean =
+		prefs.getBoolean(KEY_MEDIA_PLAYER_SOURCE_PREFIX + source.name, source.mediaPlayerDefault())
+
+	fun setMediaPlayerEnabledForSource(source: MangaSource, enabled: Boolean) {
+		prefs.edit { putBoolean(KEY_MEDIA_PLAYER_SOURCE_PREFIX + source.name, enabled) }
+	}
+
+	fun resetMediaPlayerSourceOverrides() {
+		val keys = prefs.all.keys.filter { it.startsWith(KEY_MEDIA_PLAYER_SOURCE_PREFIX) }
+		if (keys.isNotEmpty()) {
+			prefs.edit { for (key in keys) remove(key) }
+		}
+	}
+
+	val mediaQueueRepeat: RepeatMode
+		get() = prefs.getEnumValue(KEY_MEDIA_QUEUE_REPEAT, RepeatMode.NONE)
+
+	val isMediaQueueShuffleOnLoad: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_QUEUE_SHUFFLE, false)
+
+	// endregion booru media player
 
 	val isQuickFilterEnabled: Boolean
 		get() = prefs.getBoolean(KEY_QUICK_FILTER, true)
@@ -516,6 +663,147 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 	val proxySecret: String?
 		get() = prefs.getString(KEY_PROXY_SECRET, null)?.nullIfEmpty()
 
+	// Experimental proxy pool (defaults + docs in core/network/proxypool/)
+	/** Amendment 5: modes are Off / Fallback / Always ("as before"). Read
+	 *  defensively: a stored value the engine no longer offers (CHAINED
+	 *  from the superseded experiment) degrades to OFF rather than
+	 *  crashing the settings load. */
+	val poolMode: PoolMode
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_MODE, PoolMode.OFF)
+		}.getOrDefault(PoolMode.OFF)
+
+	val poolLists: List<String>
+		get() = (prefs.getString(KEY_POOL_LISTS, null) ?: POOL_DEFAULT_LISTS)
+			.split('\n')
+			.map { it.trim() }
+			.filter { it.startsWith("http", ignoreCase = true) }
+
+	val poolTestUrl: String
+		get() = prefs.getString(KEY_POOL_TEST_URL, null)?.trim()
+			.takeIf { !it.isNullOrEmpty() && it.startsWith("https://") }
+			?: POOL_DEFAULT_TEST_URL
+
+	val poolMaxHealthy: Int
+		get() = (prefs.getString(KEY_POOL_MAX_HEALTHY, null)?.trim()?.toIntOrNull()
+			?: POOL_DEFAULT_MAX_HEALTHY).coerceIn(1, POOL_MAX_HEALTHY_CAP)
+
+	/** Manual always-direct hosts; subdomains included ("example.com" also matches "a.example.com"). */
+	val poolForbiddenHosts: Set<String>
+		get() = prefs.getString(KEY_POOL_FORBIDDEN_HOSTS, null)
+			?.split(',', '\n', ' ', '\t')
+			?.asSequence()
+			?.map { it.trim().lowercase() }
+			?.filter { it.isNotEmpty() }
+			?.toSet()
+			.orEmpty()
+
+	/** Mirror list URLs (Task C 4.6.2 step a): full alternates fetched when a
+	 *  list's direct fetch and its last-good disk copy both fail. Defaults are
+	 *  the jsDelivr forms of the stock lists (fetch_page-verified 2026-10-06). */
+	val poolMirrors: List<String>
+		get() = (prefs.getString(KEY_POOL_MIRRORS, null) ?: ProxyListFetcher.POOL_DEFAULT_MIRRORS)
+			.split('\n')
+			.map { it.trim() }
+			.filter { it.startsWith("http", ignoreCase = true) }
+
+	/** Per-probe timeout for DIRECT candidate checks (seconds, user-set, spec
+	 *  4.6.1; the value the picker shows). */
+	val poolTimeoutDirectS: Int
+		get() = (prefs.getString(KEY_POOL_TIMEOUT_DIRECT_S, null)?.trim()?.toIntOrNull()
+			?: ProxyHealthChecker.DEFAULT_TIMEOUT_S).coerceIn(1, 60)
+
+	/** Per-probe timeout for CHAIN checks (seconds, user-set, spec 4.6.2;
+	 *  chains cost two extra handshakes, so the default is higher). */
+	val poolTimeoutChainS: Int
+		get() = (prefs.getString(KEY_POOL_TIMEOUT_CHAIN_S, null)?.trim()?.toIntOrNull()
+			?: ProxyHealthChecker.DEFAULT_CHAIN_TIMEOUT_S).coerceIn(1, 60)
+
+	/** Task C 4.10.2 / amendment 5 item 4: certificate checks on proxied
+	 *  requests. FOLLOW_APP (default): pooled clients inherit the tier TLS
+	 *  setup whole (trust-all included when the app SSL bypass is on; the
+	 *  pool is never inert because of that setting). ALWAYS_VERIFY forces
+	 *  the platform+bundled-roots helper; ALWAYS_IGNORE reuses the app's
+	 *  disableCertificateVerification on the pooled client only. No second
+	 *  trust-all implementation exists; existing cert code is not edited. */
+	val poolCertChecks: PoolCertChecks
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_CERT_CHECKS, PoolCertChecks.FOLLOW_APP)
+		}.getOrDefault(PoolCertChecks.FOLLOW_APP)
+
+	/** Amendment 5 item 2a: hops per chain, 1..3, default 2. Hop 1 is the
+	 *  entry (the old static gateway is just one possible entry); the last
+	 *  hop is the exit that reaches the target. */
+	val poolChainLength: Int
+		get() = (prefs.getString(KEY_POOL_CHAIN_LENGTH, null)?.trim()?.toIntOrNull() ?: 2).coerceIn(1, 3)
+
+	/** Amendment 5 item 2f: fetch lists through a proxy. NEVER = the old
+	 *  hard-locked direct behavior; IF_DIRECT_FAILS (default) = direct,
+	 *  disk and mirrors first, then one pass through the static proxy or
+	 *  an alive pool proxy; ALWAYS = through one before anything. */
+	val poolFetchLists: PoolFetchLists
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_FETCH_VIA, PoolFetchLists.IF_DIRECT_FAILS)
+		}.getOrDefault(PoolFetchLists.IF_DIRECT_FAILS)
+
+	/** Amendment 5 5c: how pool/chain routes are picked. AUTO (default) =
+	 *  round-robin over the healthy set, exactly like before; SELECTED_FIRST
+	 *  = picked proxies queue ahead of everything else; SELECTED_ONLY = only
+	 *  picked/manual entries may ride. Values persist by NAME (getEnumValue). */
+	val poolSelectionMode: PoolSelectionMode
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_SELECTION_MODE, PoolSelectionMode.AUTO)
+		}.getOrDefault(PoolSelectionMode.AUTO)
+
+	/** Amendment 5 5c: slot restriction for picked proxies in chains.
+	 *  ANY (default) = free use; ENTRY = picks prefer the hop-1/middle
+	 *  slots; EXIT = picks prefer the exit (target-facing) hop. */
+	val poolPickedRole: PoolPickedRole
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_PICKED_ROLE, PoolPickedRole.ANY)
+		}.getOrDefault(PoolPickedRole.ANY)
+
+	/** Amendment 5 item 5a: plain HTTP rides the pool too. Default On
+	 *  (not restricted); Off keeps the pre-amendment HTTPS-only shape. */
+	val poolPlainHttp: Boolean
+		get() = prefs.getBoolean(KEY_POOL_PLAIN_HTTP, true)
+
+	/** Amendment 5 item 5b: skip hosts that hold a login cookie. Default
+	 *  Off; the narrow rule of 4.8 item 5 applies only when On. */
+	val poolSkipLoginHosts: Boolean
+		get() = prefs.getBoolean(KEY_POOL_SKIP_LOGIN_HOSTS, false)
+
+	/** Amendment 5 item 5c: category switches (all default On). */
+	val poolCatSources: Boolean
+		get() = prefs.getBoolean(KEY_POOL_CAT_SOURCES, true)
+
+	val poolCatVideo: Boolean
+		get() = prefs.getBoolean(KEY_POOL_CAT_VIDEO, true)
+
+	val poolCatServices: Boolean
+		get() = prefs.getBoolean(KEY_POOL_CAT_SERVICES, true)
+
+	/** Amendment 5 item 5d: Cloudflare cookies on proxied requests. */
+	val poolCfCookies: PoolCfCookies
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_CF_COOKIES, PoolCfCookies.STRIP)
+		}.getOrDefault(PoolCfCookies.STRIP)
+
+	/** Ordinary cookies on proxied requests (earlier setting, kept):
+	 *  AUTO = strip the Cookie header on pool retries after the first
+	 *  failure; SEND = never strip; STRIP = always strip on pooled routes. */
+	val poolCookiesMode: PoolCookiesMode
+		get() = runCatching {
+			prefs.getEnumValue(KEY_POOL_COOKIES_MODE, PoolCookiesMode.AUTO)
+		}.getOrDefault(PoolCookiesMode.AUTO)
+
+	/** Amendment 5 item 5f: the Always-use host list. Never-use overrides
+	 *  it (isForbiddenManually runs first in the planner). */
+	val poolAlwaysUseHosts: Set<String>
+		get() = prefs.getStringSet(KEY_POOL_ALWAYS_HOSTS, emptySet()).orEmpty()
+			.mapTo(HashSet()) { it.trim().lowercase() }
+			.also { it.remove("") }
+
 	var localListOrder: SortOrder
 		get() = prefs.getEnumValue(KEY_LOCAL_LIST_ORDER, SortOrder.NEWEST)
 		set(value) = prefs.edit { putEnumValue(KEY_LOCAL_LIST_ORDER, value) }
@@ -612,6 +900,9 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 
 	val isPagesSavingAskEnabled: Boolean
 		get() = prefs.getBoolean(KEY_PAGES_SAVE_ASK, true)
+
+	val isPagesSaveOriginalEnabled: Boolean
+		get() = prefs.getBoolean(KEY_PAGES_SAVE_ORIGINAL, true)
 
 	val isStatsEnabled: Boolean
 		get() = prefs.getBoolean(KEY_STATS_ENABLED, false)
@@ -716,6 +1007,68 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_SEARCH_HISTORY_CLEAR = "search_history_clear"
 		const val KEY_UPDATES_FEED_CLEAR = "updates_feed_clear"
 		const val KEY_GRID_SIZE = "grid_size"
+		const val KEY_BOORU_GRID_COLUMNS = "booru_grid_columns"
+
+		// booru media player ("Media player" settings section)
+		const val KEY_MEDIA_BLUR_THUMBNAILS = "media_blur_thumbnails"
+		const val KEY_BOORU_LONG_PRESS_ACTION = "booru_long_press_action"
+		const val KEY_MEDIA_BLUR_INTENSITY = "media_blur_intensity"
+		const val KEY_MEDIA_GIF_TAP_ACTION = "media_gif_tap_action"
+		const val KEY_MEDIA_VIDEO_TAP_ACTION = "media_video_tap_action"
+		const val KEY_MEDIA_VIDEO_DEFAULT_QUALITY = "media_video_default_quality"
+		const val KEY_MEDIA_DEFAULT_PLAYER_MODE = "media_default_player_mode"
+		const val KEY_MEDIA_GIF_LOOP = "media_gif_loop"
+		const val KEY_MEDIA_GIF_FRAME_CONTROLS = "media_gif_frame_controls"
+		const val KEY_MEDIA_VIDEO_LOOP = "media_video_loop"
+		const val KEY_MEDIA_DEFAULT_SPEED = "media_default_speed"
+		const val KEY_MEDIA_SKIP_INTERVAL = "media_skip_interval"
+		const val KEY_MEDIA_FLOATING_SIZE = "media_floating_size"
+		const val KEY_MEDIA_FLOATING_POSITION = "media_floating_position"
+		const val KEY_MEDIA_FLOATING_LOCK = "media_floating_lock"
+		const val KEY_MEDIA_VOLUME_GESTURE = "media_volume_gesture"
+		const val KEY_MEDIA_BRIGHTNESS_GESTURE = "media_brightness_gesture"
+		const val KEY_MEDIA_PINCH_ZOOM = "media_pinch_zoom"
+		const val KEY_MEDIA_ASPECT_RATIO = "media_aspect_ratio"
+		const val KEY_MEDIA_QUEUE_PERSIST = "media_queue_persist"
+		const val KEY_MEDIA_QUEUE_REPEAT = "media_queue_repeat"
+		const val KEY_MEDIA_QUEUE_SHUFFLE = "media_queue_shuffle"
+		const val KEY_BOORU_VIDEO_ENGINE = "booru_video_engine"
+		const val KEY_BOORU_HIBERNATE_MODE = "booru_hibernate_mode"
+		const val KEY_BOORU_STREAM_PART_SIZE_MB = "booru_stream_part_size_mb"
+		const val KEY_BOORU_STREAM_PART_COUNT = "booru_stream_part_count"
+
+		/** Prefix for the per-source media-player toggles (dynamic keys, not exported). */
+		const val KEY_MEDIA_PLAYER_SOURCE_PREFIX = "media_player_source_"
+
+		/** Every key owned by Settings → "Media player" (settings import/export + diff). */
+		@JvmField
+		val MEDIA_KEYS: Set<String> = setOf(
+			KEY_MEDIA_BLUR_THUMBNAILS,
+			KEY_MEDIA_BLUR_INTENSITY,
+			KEY_MEDIA_GIF_TAP_ACTION,
+			KEY_MEDIA_VIDEO_TAP_ACTION,
+			KEY_MEDIA_DEFAULT_PLAYER_MODE,
+			KEY_MEDIA_GIF_LOOP,
+			KEY_MEDIA_GIF_FRAME_CONTROLS,
+			KEY_MEDIA_VIDEO_LOOP,
+			KEY_MEDIA_DEFAULT_SPEED,
+			KEY_MEDIA_SKIP_INTERVAL,
+			KEY_MEDIA_FLOATING_SIZE,
+			KEY_MEDIA_FLOATING_POSITION,
+			KEY_MEDIA_FLOATING_LOCK,
+			KEY_MEDIA_VOLUME_GESTURE,
+			KEY_MEDIA_BRIGHTNESS_GESTURE,
+			KEY_MEDIA_PINCH_ZOOM,
+			KEY_MEDIA_ASPECT_RATIO,
+			KEY_MEDIA_QUEUE_PERSIST,
+			KEY_MEDIA_QUEUE_REPEAT,
+			KEY_MEDIA_QUEUE_SHUFFLE,
+			KEY_BOORU_LONG_PRESS_ACTION,
+			KEY_BOORU_VIDEO_ENGINE,
+			KEY_BOORU_HIBERNATE_MODE,
+			KEY_BOORU_STREAM_PART_SIZE_MB,
+			KEY_BOORU_STREAM_PART_COUNT,
+		)
 		const val KEY_GRID_SIZE_PAGES = "grid_size_pages"
 		const val KEY_REMOTE_SOURCES = "remote_sources"
 		const val KEY_LOCAL_STORAGE = "local_storage"
@@ -816,6 +1169,32 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_PROXY_LOGIN = "proxy_login"
 		const val KEY_PROXY_PASSWORD = "proxy_password"
 		const val KEY_PROXY_SECRET = "proxy_secret"
+
+		// Experimental proxy pool (revertable; components 1-5 in core/network/proxypool/)
+		const val KEY_POOL_MODE = "pool_mode"
+		const val KEY_POOL_LISTS = "pool_lists"
+		const val KEY_POOL_TEST_URL = "pool_test_url"
+		const val KEY_POOL_MAX_HEALTHY = "pool_max_healthy"
+		const val KEY_POOL_FORBIDDEN_HOSTS = "pool_forbidden_hosts"
+		const val KEY_POOL_MIRRORS = "pool_mirrors"
+		const val KEY_POOL_TIMEOUT_DIRECT_S = "pool_timeout_direct_s"
+		const val KEY_POOL_TIMEOUT_CHAIN_S = "pool_timeout_chain_s"
+
+		const val KEY_POOL_CHAIN_LENGTH = "pool_chain_length"
+		const val KEY_POOL_FETCH_VIA = "pool_fetch_via"
+		const val KEY_POOL_SELECTION_MODE = "pool_selection_mode"
+		const val KEY_POOL_PICKED_ROLE = "pool_picked_role"
+
+		// Amendment 5: restrictions became switches (default = not restricted)
+		const val KEY_POOL_PLAIN_HTTP = "pool_plain_http"
+		const val KEY_POOL_SKIP_LOGIN_HOSTS = "pool_skip_login_hosts"
+		const val KEY_POOL_CAT_SOURCES = "pool_cat_sources"
+		const val KEY_POOL_CAT_VIDEO = "pool_cat_video"
+		const val KEY_POOL_CAT_SERVICES = "pool_cat_services"
+		const val KEY_POOL_CF_COOKIES = "pool_cf_cookies"
+		const val KEY_POOL_COOKIES_MODE = "pool_cookies_mode"
+		const val KEY_POOL_ALWAYS_HOSTS = "pool_always_hosts"
+		const val KEY_POOL_CERT_CHECKS = "pool_cert_checks"
 		const val KEY_IMAGES_PROXY = "images_proxy_2"
 
 		// Experimental wsrv.nl quality settings (revertable)
@@ -863,6 +1242,7 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_READING_TIME = "reading_time"
 		const val KEY_PAGES_SAVE_DIR = "pages_dir"
 		const val KEY_PAGES_SAVE_ASK = "pages_dir_ask"
+		const val KEY_PAGES_SAVE_ORIGINAL = "pages_save_original"
 		const val KEY_STATS_ENABLED = "stats_on"
 		const val KEY_FEED_HEADER = "feed_header"
 		const val KEY_SEARCH_SUGGESTION_TYPES = "search_suggest_types"
@@ -902,5 +1282,8 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		// values
 		private const val READER_CROP_PAGED = 1
 		private const val READER_CROP_WEBTOON = 2
+		private const val BOORU_GRID_COLUMNS_DEFAULT = 3
+		private const val BOORU_GRID_COLUMNS_MIN = 2
+		private const val BOORU_GRID_COLUMNS_MAX = 4
 	}
 }
