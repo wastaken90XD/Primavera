@@ -133,7 +133,8 @@ class WebtoonReaderFragment : BaseReaderFragment<FragmentReaderWebtoonBinding>()
 		}
 	}
 
-	override suspend fun onPagesChanged(pages: List<ReaderPage>, pendingState: ReaderState?) = coroutineScope {
+	// explicit Unit: the trailing post{} returns Boolean?, which would otherwise leak into the inferred return type
+	override suspend fun onPagesChanged(pages: List<ReaderPage>, pendingState: ReaderState?): Unit = coroutineScope {
 		val setItems = launch {
 			requireAdapter().setItems(pages)
 			yield()
