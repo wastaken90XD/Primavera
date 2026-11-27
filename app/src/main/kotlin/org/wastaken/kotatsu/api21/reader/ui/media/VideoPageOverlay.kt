@@ -169,9 +169,26 @@ class VideoPageOverlay(
 
 	/** @return true if this overlay handles the page and the normal page load must be suppressed. */
 	fun onBind(page: ReaderPage): Boolean {
+		// source check comes first, always (see BooruMedia.kt); the URL must
+		// carry the video signal on this route
+		if (!page.url.looksLikeVideo()) {
+			reset()
+			isHandling = false
+			return false
+		}
+		return bindPage(page)
+	}
+
+	/**
+	 * Late-classification entry (TSD-BOORU-MMBD-001 M1): the MediaSniffer probe
+	 * proved video bytes behind an extension-less URL, so the URL check is
+	 * skipped. Everything else (source gate, placeholder-first) is unchanged.
+	 */
+	fun onBindForced(page: ReaderPage): Boolean = bindPage(page)
+
+	private fun bindPage(page: ReaderPage): Boolean {
 		reset()
-		// source check comes first, always (see BooruMedia.kt)
-		isHandling = page.source.isMediaPlayerEnabled(entryPoint.settings()) && page.url.looksLikeVideo()
+		isHandling = page.source.isMediaPlayerEnabled(entryPoint.settings())
 		if (!isHandling) {
 			return false
 		}
