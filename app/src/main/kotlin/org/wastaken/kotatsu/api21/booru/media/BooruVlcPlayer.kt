@@ -124,6 +124,11 @@ class BooruVlcPlayer(context: Context) : BooruEnginePlayer {
 		player.setRate(rate)
 	}
 
+	override fun setMuted(muted: Boolean) {
+		// libVLC volume is 0-100 on the MediaPlayer, independent of the stream
+		runCatching { player.setVolume(if (muted) 0 else 100) }
+	}
+
 	override val time: Long
 		get() = player.time
 

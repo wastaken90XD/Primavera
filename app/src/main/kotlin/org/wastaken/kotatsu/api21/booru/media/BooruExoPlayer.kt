@@ -140,6 +140,11 @@ class BooruExoPlayer(
 		player?.setPlaybackSpeed(rate)
 	}
 
+	override fun setMuted(muted: Boolean) {
+		// ExoPlayer volume is 0f-1f on the player, independent of the stream
+		runCatching { player?.volume = if (muted) 0f else 1f }
+	}
+
 	override val time: Long
 		get() = player?.currentPosition ?: 0L
 

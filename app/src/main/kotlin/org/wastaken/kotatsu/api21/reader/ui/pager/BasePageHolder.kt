@@ -205,6 +205,15 @@ abstract class BasePageHolder<B : ViewBinding>(
 
 	open fun onDetachedFromWindow() = Unit
 
+	/** Webtoon center-viewport hooks (TSD-BOORU-MMBD-001 §3.3): only the center-most video plays. */
+	fun onCenterViewportEnter() {
+		videoOverlay.onCenterSelected()
+	}
+
+	fun onCenterViewportExit() {
+		videoOverlay.onCenterCleared()
+	}
+
 	private var mediaProbeJob: Job? = null
 
 	@CallSuper

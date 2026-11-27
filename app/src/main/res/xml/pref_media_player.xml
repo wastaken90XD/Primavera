@@ -102,6 +102,12 @@
 			android:key="media_video_loop"
 			android:title="@string/media_video_loop" />
 
+		<SwitchPreferenceCompat
+			android:defaultValue="false"
+			android:key="media_reader_video_autoplay"
+			android:summary="@string/media_reader_autoplay_summary"
+			android:title="@string/media_reader_autoplay_title" />
+
 		<ListPreference
 			android:entries="@array/media_speed_entries"
 			android:key="media_default_speed"

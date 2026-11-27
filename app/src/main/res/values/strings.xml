@@ -117,6 +117,11 @@
 	<string name="load_gif">Load GIF</string>
 	<string name="video_actions">Actions</string>
 	<string name="video_loop">Loop</string>
+	<string name="reader_video_mute">Mute</string>
+	<string name="reader_video_unmute">Unmute</string>
+	<string name="reader_video_fullscreen">Fullscreen</string>
+	<string name="media_reader_autoplay_title">Auto-play videos in reader</string>
+	<string name="media_reader_autoplay_summary">Video pages start playing muted as they gain focus. Risk: each focused video page consumes bandwidth and the device\'s single hardware decoder, which can stutter scrolling on low-RAM devices.</string>
 	<string name="video_skip_backward">-10s</string>
 	<string name="video_skip_forward">+10s</string>
 	<string name="play">Play</string>

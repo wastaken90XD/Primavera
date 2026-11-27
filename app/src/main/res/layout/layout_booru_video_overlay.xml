@@ -52,7 +52,7 @@
 		android:focusable="true"
 		android:visibility="gone">
 
-		<SurfaceView
+		<TextureView
 			android:id="@+id/videoSurface"
 			android:layout_width="match_parent"
 			android:layout_height="match_parent"
@@ -151,15 +151,25 @@
 							android:text="@string/video_skip_forward"
 							android:textSize="12sp" />
 
-						<com.google.android.material.button.MaterialButton
-							android:id="@+id/buttonLoop"
-							android:layout_width="wrap_content"
-							android:layout_height="wrap_content"
-							android:minWidth="0dp"
-							android:minHeight="40dp"
-							android:singleLine="true"
-							android:text="@string/video_loop"
-							android:textSize="12sp" />
+					<com.google.android.material.button.MaterialButton
+						android:id="@+id/buttonLoop"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:minWidth="0dp"
+						android:minHeight="40dp"
+						android:singleLine="true"
+						android:text="@string/video_loop"
+						android:textSize="12sp" />
+
+					<com.google.android.material.button.MaterialButton
+						android:id="@+id/buttonMute"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:minWidth="0dp"
+						android:minHeight="40dp"
+						android:singleLine="true"
+						android:text="@string/reader_video_unmute"
+						android:textSize="12sp" />
 
 						<com.google.android.material.button.MaterialButton
 							android:id="@+id/buttonSpeed"
@@ -171,15 +181,25 @@
 							android:textSize="12sp"
 							tools:text="1х" />
 
-						<com.google.android.material.button.MaterialButton
-							android:id="@+id/buttonActions"
-							android:layout_width="wrap_content"
-							android:layout_height="wrap_content"
-							android:minWidth="0dp"
-							android:minHeight="40dp"
-							android:singleLine="true"
-							android:text="@string/video_actions"
-							android:textSize="12sp" />
+					<com.google.android.material.button.MaterialButton
+						android:id="@+id/buttonActions"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:minWidth="0dp"
+						android:minHeight="40dp"
+						android:singleLine="true"
+						android:text="@string/video_actions"
+						android:textSize="12sp" />
+
+					<com.google.android.material.button.MaterialButton
+						android:id="@+id/buttonFullscreen"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:minWidth="0dp"
+						android:minHeight="40dp"
+						android:singleLine="true"
+						android:text="@string/reader_video_fullscreen"
+						android:textSize="12sp" />
 
 					</LinearLayout>
 

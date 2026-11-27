@@ -28,6 +28,13 @@ interface BooruEnginePlayer {
 
 	fun setSpeed(rate: Float)
 
+	/**
+	 * Reader-session mute (TSD-BOORU-MMBD-001 §3.4): volume 0 without touching
+	 * the system stream volume; un-muting restores full volume. Orthogonal to
+	 * pause/resume so a muted video keeps decoding silently.
+	 */
+	fun setMuted(muted: Boolean)
+
 	val time: Long
 
 	val length: Long

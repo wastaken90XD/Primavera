@@ -2,16 +2,13 @@ package org.wastaken.kotatsu.api21.reader.ui.media
 
 import android.content.Context
 import android.content.Intent
-import android.media.AudioManager
-import android.media.MediaPlayer
-import android.media.PlaybackParams
-import android.net.Uri
+import android.graphics.SurfaceTexture
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.GestureDetector
 import android.view.MotionEvent
-import android.view.SurfaceHolder
+import android.view.TextureView
 import android.widget.FrameLayout
 import android.widget.SeekBar
 import androidx.core.net.toUri
@@ -27,48 +24,48 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.wastaken.kotatsu.api21.R
-import org.wastaken.kotatsu.api21.core.parser.ParserMangaRepository
+import org.wastaken.kotatsu.api21.booru.media.BooruMediaItem
+import org.wastaken.kotatsu.api21.booru.media.BooruMediaService
+import org.wastaken.kotatsu.api21.booru.media.BooruMediaType
+import org.wastaken.kotatsu.api21.booru.media.ui.BooruPlayerActivity
 import org.wastaken.kotatsu.api21.core.util.ext.getDisplayMessage
 import org.wastaken.kotatsu.api21.core.util.ext.isNetworkUri
 import org.wastaken.kotatsu.api21.databinding.LayoutBooruVideoOverlayBinding
 import org.wastaken.kotatsu.api21.reader.ui.pager.ReaderPage
 import java.io.IOException
-import java.net.IDN
 import java.text.SimpleDateFormat
 import java.util.Date
 
 /**
- * In-reader video player for booru reader pages. **Booru sources only**
- * (source check first, always — see BooruMedia.kt).
+ * In-reader video page for booru sources (TSD-BOORU-MMBD-001 M2). The overlay
+ * owns NO player: playback runs on the single shared engine inside
+ * [BooruMediaService], reached through [ReaderSharedMediaController], so the
+ * reader never holds more than one hardware codec instance on API 21 no
+ * matter how many video pages a gallery has.
  *
- * Videos never load or play automatically: a static placeholder with a
- * "Load video" button replaces the page and the normal image pipeline stays
- * suppressed (no prefetch, no page download). Once tapped (plus the optional
- * quality pick when the source publishes its variants), the reader UI changes
- * into a small but complete player: play/pause, seek timeline with position,
- * skip +/-10s, loop, playback speed (API 23+ only — [PlaybackParams] does not
- * exist below that), a buffering indicator and tap/double-tap gestures.
+ * Behavior contract:
+ *  - Placeholder-first: nothing loads until "Load video" (plus the optional
+ *    quality pick), UNLESS the Media-player setting "Auto-play videos in
+ *    reader" is on and the page gains focus (paged: current page; webtoon:
+ *    center-most page - driven by the fragments, see controller mode).
+ *  - Reader videos launch MUTED (TSD §3.4); the HUD mute tap unmutes the
+ *    session. Audio focus is only taken while unmuted.
+ *  - Scroll-away / background pauses and detaches (non-goal §1.3: no
+ *    background audio); scrolling back resumes at the remembered position.
+ *  - [Fullscreen] promotes the ad-hoc item into the service queue and opens
+ *    [BooruPlayerActivity] without re-sourcing (position rides along).
+ *  - Double-tap edges seek ±10s; tap toggles the HUD.
  *
- * Caching rule, strictly: playback streams through [VideoStreamProxy], a
- * loopback relay that reads the source via OkHttp (source headers replicated
- * here as [buildStreamHeaders], plus all interceptors, cookie jar and
- * CloudFlare handling apply inside OkHttp) into a bounded memory-only
- * read-ahead ring — the same architectural reason VLC/ExoPlayer play smoothly
- * (decouple network from decode by seconds, not the framework player's tiny
- * fixed HTTP cache). The full file is never written to app storage, never
- * enters the image-proxy chain, never touches the pages cache or the OkHttp
- * disk cache (no-store). The one and only way a full video file lands on the
- * device is "Download video" in the Actions dialog (chunked download straight
- * into the configured folder).
- *
- * "Actions" additionally keeps the previous destinations: Play in VLC (title
- * extra, transparent fallback to any external handler) and Open external.
+ * Streaming runs through the service's engine pipeline (ExoPlayer SimpleCache
+ * / libVLC / system MediaPlayer + VideoStreamProxy per the media-player
+ * engine setting) with full source headers. The only way a full video file
+ * lands on the device is still "Download video" in the Actions dialog.
  */
-@Suppress("DEPRECATION") // classic AudioManager focus & STREAM_MUSIC: correct for API 21-25 targets
+@Suppress("DEPRECATION")
 class VideoPageOverlay(
 	private val binding: LayoutBooruVideoOverlayBinding,
 	private val lifecycleOwner: LifecycleOwner,
-) : DefaultLifecycleObserver, SurfaceHolder.Callback {
+) : DefaultLifecycleObserver, TextureView.SurfaceTextureListener, ReaderSharedMediaController.Host {
 
 	var isHandling = false
 		private set
@@ -77,60 +74,35 @@ class VideoPageOverlay(
 	private var boundPage: ReaderPage? = null
 	private var currentStreamUrl: String? = null
 
-	private var mediaPlayer: MediaPlayer? = null
-	private var videoProxy: VideoStreamProxy? = null
-	private var surfaceReady = false
-	private var pendingStartUrl: String? = null
-	private var prepared = false
+	private var playbackStarted = false
 	private var playbackErrored = false
+	private var wasPlayingBeforePause = false
 
 	private var isLooping = false
 	private var speedIndex = SPEED_DEFAULT_INDEX
-	private var lifecycleAutoPaused = false
-	private var focusPausedPlaying = false
 
 	private val controlsHandler = Handler(Looper.getMainLooper())
 
 	private val progressRunnable = object : Runnable {
 		override fun run() {
-			val mp = mediaPlayer ?: return
-			if (prepared && !binding.seekVideo.isPressed) {
-				val position = runCatching { mp.currentPosition }.getOrDefault(0)
+			if (!controller.isAttachedHost(this@VideoPageOverlay)) return
+			if (!binding.seekVideo.isPressed) {
+				val position = controller.positionMs()
+				val duration = controller.durationMs()
+				if (duration > 0 && binding.seekVideo.max != duration) {
+					binding.seekVideo.max = duration
+					binding.textDuration.text = formatTime(duration)
+				}
 				binding.seekVideo.progress = position
 				binding.textPosition.text = formatTime(position)
 			}
-			if (isPlayingSafe()) {
-				controlsHandler.postDelayed(this, PROGRESS_INTERVAL_MS)
-			}
+			controlsHandler.postDelayed(this, PROGRESS_INTERVAL_MS)
 		}
 	}
 
 	private val autoHideRunnable = Runnable {
 		if (isPlayingSafe()) {
 			binding.controlsPanel.isGone = true
-		}
-	}
-
-	private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
-		when (focusChange) {
-			AudioManager.AUDIOFOCUS_LOSS -> {
-				focusPausedPlaying = false
-				abandonAudioFocus()
-				pausePlayback()
-			}
-			AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-			AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-				focusPausedPlaying = isPlayingSafe()
-				if (focusPausedPlaying) {
-					pausePlayback()
-				}
-			}
-			AudioManager.AUDIOFOCUS_GAIN -> {
-				if (focusPausedPlaying) {
-					focusPausedPlaying = false
-					startPlaybackResume()
-				}
-			}
 		}
 	}
 
@@ -148,8 +120,8 @@ class VideoPageOverlay(
 			override fun onDoubleTap(e: MotionEvent): Boolean {
 				val width = binding.videoContainer.width
 				when {
-					e.x < width * DOUBLE_TAP_EDGE -> seekBy(-SKIP_MS)
-					e.x > width * (1f - DOUBLE_TAP_EDGE) -> seekBy(SKIP_MS)
+					e.x < width * DOUBLE_TAP_EDGE -> controller.seekBy(this@VideoPageOverlay, -SKIP_MS)
+					e.x > width * (1f - DOUBLE_TAP_EDGE) -> controller.seekBy(this@VideoPageOverlay, SKIP_MS)
 				}
 				return true
 			}
@@ -161,6 +133,10 @@ class VideoPageOverlay(
 
 	private val entryPoint: ReaderMediaEntryPoint by lazy(LazyThreadSafetyMode.NONE) {
 		EntryPointAccessors.fromApplication(appContext, ReaderMediaEntryPoint::class.java)
+	}
+
+	private val controller: ReaderSharedMediaController by lazy(LazyThreadSafetyMode.NONE) {
+		ReaderSharedMediaController.get(appContext)
 	}
 
 	init {
@@ -193,8 +169,9 @@ class VideoPageOverlay(
 			return false
 		}
 		boundPage = page
+		isLooping = entryPoint.settings().isMediaVideoLoop
 		binding.root.isVisible = true
-		binding.videoSurface.holder.addCallback(this)
+		binding.videoSurface.surfaceTextureListener = this
 		showButtonState()
 		binding.buttonLoadVideo.setOnClickListener { showChoiceDialog(page) }
 		// direct route to the external destinations without starting playback
@@ -213,129 +190,106 @@ class VideoPageOverlay(
 	private fun reset() {
 		loadJob?.cancel()
 		loadJob = null
-		releasePlayer()
+		controller.detach(this)
 		// the holder recycles bind() calls on the same views - never stack callbacks
-		binding.videoSurface.holder.removeCallback(this)
+		binding.videoSurface.surfaceTextureListener = null
+		controlsHandler.removeCallbacks(progressRunnable)
+		controlsHandler.removeCallbacks(autoHideRunnable)
 		boundPage = null
 		currentStreamUrl = null
-		pendingStartUrl = null
+		playbackStarted = false
+		playbackErrored = false
+		wasPlayingBeforePause = false
 		speedIndex = SPEED_DEFAULT_INDEX
+		binding.videoContainer.isGone = true
+		binding.progressBuffering.isGone = true
 		binding.root.isGone = true
 	}
 
-	// region surface + media player
+	// region shared-engine playback
 
-	override fun surfaceCreated(holder: SurfaceHolder) {
-		surfaceReady = true
-		pendingStartUrl?.let { url ->
-			pendingStartUrl = null
-			attachPlayer(url)
-		}
-	}
-
-	override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
-
-	override fun surfaceDestroyed(holder: SurfaceHolder) {
-		surfaceReady = false
-	}
+	private fun buildItem(page: ReaderPage, streamUrl: String): BooruMediaItem = BooruMediaItem(
+		id = BooruMediaItem.uidOf(streamUrl),
+		url = streamUrl,
+		source = page.source,
+		title = streamUrl.urlFileName(),
+		thumbnailUrl = page.preview,
+		mediaType = BooruMediaType.VIDEO,
+	)
 
 	private fun startPlayback(streamUrl: String) {
+		val page = boundPage ?: return
 		currentStreamUrl = streamUrl
 		playbackErrored = false
-		releasePlayer()
+		playbackStarted = true
 		binding.panelVideo.isGone = true
 		binding.progressVideo.isGone = true
 		binding.videoContainer.isVisible = true
 		binding.progressBuffering.isVisible = true
-		showControls(hideLater = true)
-		if (surfaceReady) {
-			attachPlayer(streamUrl)
-		} else {
-			// surfaceCreated has not fired for the freshly shown container yet;
-			// it picks the URL up from here
-			pendingStartUrl = streamUrl
-		}
-	}
-
-	private fun attachPlayer(streamUrl: String) {
-		val page = boundPage ?: return
-		val mp = MediaPlayer()
-		mediaPlayer = mp
-		prepared = false
-		mp.setAudioStreamType(AudioManager.STREAM_MUSIC)
-		mp.setDisplay(binding.videoSurface.holder)
-		mp.setOnPreparedListener { player -> onPlayerPrepared(player) }
-		mp.setOnInfoListener { _, what, _ -> onPlayerInfo(what) }
-		mp.setOnCompletionListener { onPlayerCompletion() }
-		mp.setOnErrorListener { _, _, _ ->
-			onPlaybackError()
-			true
-		}
-		mp.setOnVideoSizeChangedListener { player, _, _ -> fitSurface(player) }
-		mp.setOnBufferingUpdateListener { _, percent ->
-			val duration = binding.seekVideo.max
-			if (duration > 0) {
-				binding.seekVideo.secondaryProgress = duration * percent / 100
-			}
-		}
-		try {
-			// smooth like real players: VLC/ExoPlayer decouple network from decode
-			// with a large read-ahead buffer; the framework player's own HTTP cache
-			// is tiny. The loopback relay gives it one (bounded memory ring, okio
-			// segments, zero disk, no-store upstream, Range-aware seeks).
-			val proxy = VideoStreamProxy(entryPoint.okHttpClient())
-			videoProxy = proxy
-			val localUrl = proxy.start(streamUrl, page.source, buildStreamHeaders(page))
-			mp.setDataSource(appContext, Uri.parse(localUrl))
-			mp.prepareAsync()
-		} catch (e: Exception) {
-			onPlaybackError()
-		}
-	}
-
-	private fun onPlayerPrepared(mp: MediaPlayer) {
-		prepared = true
-		fitSurface(mp)
-		val duration = runCatching { mp.duration }.getOrDefault(0).coerceAtLeast(0)
-		binding.seekVideo.max = duration
 		binding.seekVideo.progress = 0
 		binding.textPosition.text = formatTime(0)
-		binding.textDuration.text = formatTime(duration)
-		mp.isLooping = isLooping
-		applySpeed(mp)
-		binding.progressBuffering.isGone = true
-		requestAudioFocus()
-		mp.start()
-		updatePlayPauseIcon()
-		controlsHandler.post(progressRunnable)
 		showControls(hideLater = true)
+		controller.attach(this, binding.videoSurface, buildItem(page, streamUrl))
 	}
 
-	private fun onPlayerInfo(what: Int): Boolean {
-		when (what) {
-			MediaPlayer.MEDIA_INFO_BUFFERING_START -> binding.progressBuffering.isVisible = true
-			MediaPlayer.MEDIA_INFO_BUFFERING_END -> binding.progressBuffering.isGone = true
+	/** Auto-play entry (paged on-resume / webtoon center): no dialogs, default variant. */
+	fun startFromAutoPlay() {
+		val page = boundPage ?: return
+		if (!isHandling || playbackStarted || playbackErrored) return
+		if (!entryPoint.settings().isMediaReaderVideoAutoplay) return
+		startPlayback(page.url.videoStreamVariants().first().url)
+	}
+
+	/** Webtoon center-viewport entry (TSD §3.3): the center-most video page plays. */
+	fun onCenterSelected() {
+		if (!isHandling || controller.isAttachedHost(this)) return
+		val page = boundPage ?: return
+		when {
+			playbackStarted && wasPlayingBeforePause -> {
+				wasPlayingBeforePause = false
+				currentStreamUrl?.let { url ->
+					controller.attach(this, binding.videoSurface, buildItem(page, url))
+				}
+			}
+			else -> startFromAutoPlay()
 		}
-		return false
 	}
 
-	private fun onPlayerCompletion() {
-		if (isLooping) {
+	/** Webtoon center-viewport exit: pause + detach, resume point remembered. */
+	fun onCenterCleared() {
+		controller.detach(this)
+	}
+
+	private fun isPlayingSafe(): Boolean =
+		controller.isAttachedHost(this) && controller.isPlaying()
+
+	// letterbox the texture inside the container (aspect-fit), like an image page
+	private fun fitVideo(videoW: Int, videoH: Int) {
+		val container = binding.videoContainer
+		val cw = container.width
+		val ch = container.height
+		if (cw <= 0 || ch <= 0 || videoW <= 0 || videoH <= 0) {
 			return
 		}
-		updatePlayPauseIcon()
-		showControls(hideLater = false)
+		val scale = minOf(cw.toFloat() / videoW, ch.toFloat() / videoH)
+		val lp = binding.videoSurface.layoutParams as FrameLayout.LayoutParams
+		lp.width = (videoW * scale).toInt()
+		lp.height = (videoH * scale).toInt()
+		lp.gravity = android.view.Gravity.CENTER
+		binding.videoSurface.layoutParams = lp
 	}
 
 	private fun onPlaybackError() {
 		if (playbackErrored) {
-			// both the prepared/setDataSource path and the listener can report the
-			// same failure once - the fallback dialog must fire only once
+			// one failure dialog per playback attempt, never two
 			return
 		}
 		playbackErrored = true
 		val url = currentStreamUrl
-		releasePlayer()
+		controller.detach(this)
+		controlsHandler.removeCallbacks(progressRunnable)
+		binding.videoContainer.isGone = true
+		binding.progressBuffering.isGone = true
 		showButtonState()
 		if (url != null) {
 			// graceful fallback: still offer the external destinations for this stream
@@ -345,75 +299,77 @@ class VideoPageOverlay(
 		}
 	}
 
-	private fun releasePlayer() {
-		controlsHandler.removeCallbacks(progressRunnable)
-		controlsHandler.removeCallbacks(autoHideRunnable)
-		mediaPlayer?.let { mp ->
-			runCatching { mp.setDisplay(null) }
-			runCatching { mp.release() }
-		}
-		mediaPlayer = null
-		videoProxy?.stop()
-		videoProxy = null
-		prepared = false
-		abandonAudioFocus()
-		focusPausedPlaying = false
-		lifecycleAutoPaused = false
-		binding.videoContainer.isGone = true
-		binding.progressBuffering.isGone = true
+	// endregion
+
+	// region TextureView.SurfaceTextureListener
+
+	override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+		controller.onSurfaceReady(this, surface, width, height)
 	}
 
-	private fun isPlayingSafe(): Boolean {
-		val mp = mediaPlayer ?: return false
-		return prepared && runCatching { mp.isPlaying }.getOrDefault(false)
+	override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+		controller.onSurfaceReady(this, surface, width, height)
 	}
 
-	// letterbox the surface inside the container (aspect-fit), like an image page
-	private fun fitSurface(mp: MediaPlayer) {
-		val container = binding.videoContainer
-		val cw = container.width
-		val ch = container.height
-		val vw = runCatching { mp.videoWidth }.getOrDefault(0)
-		val vh = runCatching { mp.videoHeight }.getOrDefault(0)
-		if (cw <= 0 || ch <= 0 || vw <= 0 || vh <= 0) {
-			return
-		}
-		val scale = minOf(cw.toFloat() / vw, ch.toFloat() / vh)
-		val lp = binding.videoSurface.layoutParams as FrameLayout.LayoutParams
-		lp.width = (vw * scale).toInt()
-		lp.height = (vh * scale).toInt()
-		lp.gravity = android.view.Gravity.CENTER
-		binding.videoSurface.layoutParams = lp
+	override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+		// TSD §6 race rule: synchronously unbind the engine BEFORE the
+		// SurfaceTexture is released, then let it go
+		controller.onSurfaceDestroyed(this)
+		return true
 	}
 
-	/**
-	 * Rebuilds the headers [org.wastaken.kotatsu.api21.core.network.CommonHeadersInterceptor]
-	 * would have added if this request went through OkHttp: parser request headers first,
-	 * then the default user agent, then a referer derived from the source domain.
-	 * Cookies/Cloudflare handling cannot be replicated outside OkHttp; direct video CDNs
-	 * used by booru sources only key on referer/user-agent in practice.
-	 */
-	private fun buildStreamHeaders(page: ReaderPage): Map<String, String> {
-		val result = LinkedHashMap<String, String>()
-		val repository = runCatching {
-			entryPoint.mangaRepositoryFactory().create(page.source) as? ParserMangaRepository
-		}.getOrNull()
-		repository?.getRequestHeaders()?.let { headers ->
-			for (name in headers.names()) {
-				headers[name]?.let { value -> result.putIfAbsent(name, value) }
+	override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
+
+	// endregion
+
+	// region ReaderSharedMediaController.Host
+
+	override fun onReaderPlaybackStateChanged(state: BooruMediaService.PlaybackState) {
+		when (state) {
+			BooruMediaService.PlaybackState.PLAYING -> {
+				binding.progressBuffering.isGone = true
+				updatePlayPauseIcon()
+				controlsHandler.removeCallbacks(progressRunnable)
+				controlsHandler.post(progressRunnable)
+				showControls(hideLater = true)
+			}
+
+			BooruMediaService.PlaybackState.PAUSED -> {
+				updatePlayPauseIcon()
+				showControls(hideLater = false)
+			}
+
+			BooruMediaService.PlaybackState.PREPARING -> {
+				binding.progressBuffering.isVisible = true
+			}
+
+			BooruMediaService.PlaybackState.IDLE -> {
+				// ended (non-looping): rewind affordance, controls stay up
+				controlsHandler.removeCallbacks(progressRunnable)
+				binding.progressBuffering.isGone = true
+				updatePlayPauseIcon()
+				showControls(hideLater = false)
 			}
 		}
-		if (result.hasNoHeader(HEADER_USER_AGENT)) {
-			result[HEADER_USER_AGENT] = entryPoint.mangaLoaderContext().getDefaultUserAgent()
-		}
-		if (repository != null && result.hasNoHeader(HEADER_REFERER)) {
-			result[HEADER_REFERER] = "https://${IDN.toASCII(repository.domain)}/"
-		}
-		return result
 	}
 
-	private fun Map<String, String>.hasNoHeader(name: String): Boolean =
-		keys.none { it.equals(name, ignoreCase = true) }
+	override fun onReaderBufferingChanged(buffering: Boolean) {
+		binding.progressBuffering.isVisible = buffering
+	}
+
+	override fun onReaderVideoSizeChanged(width: Int, height: Int) {
+		fitVideo(width, height)
+	}
+
+	override fun onReaderPlaybackError() {
+		onPlaybackError()
+	}
+
+	override fun onReaderDetached(wasPlaying: Boolean) {
+		wasPlayingBeforePause = wasPlaying
+		controlsHandler.removeCallbacks(progressRunnable)
+		updatePlayPauseIcon()
+	}
 
 	// endregion
 
@@ -427,20 +383,24 @@ class VideoPageOverlay(
 		}
 		controlsInitialized = true
 		binding.buttonPlayPause.setOnClickListener {
-			if (isPlayingSafe()) {
-				pausePlayback()
-			} else {
-				startPlaybackResume()
-			}
+			controller.togglePlayPause(this)
+			updatePlayPauseIcon()
+			showControls(hideLater = true)
 		}
-		binding.buttonSkipBack.setOnClickListener { seekBy(-SKIP_MS) }
-		binding.buttonSkipForward.setOnClickListener { seekBy(SKIP_MS) }
+		binding.buttonSkipBack.setOnClickListener { controller.seekBy(this, -SKIP_MS) }
+		binding.buttonSkipForward.setOnClickListener { controller.seekBy(this, SKIP_MS) }
 		binding.buttonLoop.setOnClickListener {
 			isLooping = !isLooping
-			mediaPlayer?.let { mp -> runCatching { mp.isLooping = isLooping } }
+			controller.setLooping(this, isLooping)
 			updateLoopButton()
 		}
 		updateLoopButton()
+		binding.buttonMute.setOnClickListener {
+			controller.setMuted(!controller.isMuted)
+			updateMuteButton()
+		}
+		updateMuteButton()
+		binding.buttonFullscreen.setOnClickListener { openFullscreen() }
 		binding.buttonActions.setOnClickListener {
 			currentStreamUrl?.let { url -> showActionDialogFromUrl(url, titleRes = R.string.load_video) }
 		}
@@ -448,7 +408,7 @@ class VideoPageOverlay(
 			updateSpeedButton()
 			binding.buttonSpeed.setOnClickListener {
 				speedIndex = (speedIndex + 1) % SPEED_STEPS.size
-				mediaPlayer?.let { mp -> applySpeed(mp) }
+				controller.setSpeed(this, SPEED_STEPS[speedIndex])
 				updateSpeedButton()
 			}
 		} else {
@@ -468,11 +428,8 @@ class VideoPageOverlay(
 			}
 
 			override fun onStopTrackingTouch(seekBar: SeekBar) {
-				val mp = mediaPlayer
-				if (mp != null && prepared) {
-					runCatching { mp.seekTo(seekBar.progress) }
-					controlsHandler.post(progressRunnable)
-				}
+				controller.seekTo(this@VideoPageOverlay, seekBar.progress)
+				controlsHandler.post(progressRunnable)
 			}
 		})
 		binding.videoContainer.setOnTouchListener { _, event ->
@@ -481,41 +438,29 @@ class VideoPageOverlay(
 		}
 	}
 
-	private fun pausePlayback() {
-		val mp = mediaPlayer ?: return
-		if (!prepared) {
-			return
-		}
-		runCatching { mp.pause() }
-		updatePlayPauseIcon()
-		showControls(hideLater = false)
-	}
-
-	private fun startPlaybackResume() {
-		val mp = mediaPlayer ?: return
-		if (!prepared) {
-			return
-		}
-		requestAudioFocus()
-		runCatching { mp.start() }
-		updatePlayPauseIcon()
-		controlsHandler.post(progressRunnable)
-		showControls(hideLater = true)
-	}
-
-	private fun seekBy(deltaMs: Int) {
-		val mp = mediaPlayer ?: return
-		if (!prepared) {
-			return
-		}
-		val duration = binding.seekVideo.max
-		val position = runCatching { mp.currentPosition }.getOrDefault(0)
-		val target = (position + deltaMs).coerceIn(0, duration)
-		runCatching { mp.seekTo(target) }
-		if (!binding.seekVideo.isPressed) {
-			binding.seekVideo.progress = target
-			binding.textPosition.text = formatTime(target)
-		}
+	/**
+	 * Fullscreen handoff (TSD §3.4): the ad-hoc item joins the service queue
+	 * unmuted without re-sourcing; the player activity finds it already
+	 * current and simply binds its surface - no cold start.
+	 */
+	private fun openFullscreen() {
+		val page = boundPage ?: return
+		val url = currentStreamUrl ?: return
+		val item = if (controller.isAttachedHost(this)) {
+			controller.promoteToQueue(this)
+		} else {
+			null
+		} ?: buildItem(page, url)
+		// ownership transfer: the queue/fullscreen player owns the video now;
+		// this page goes back to its placeholder (a return does not re-capture it)
+		controlsHandler.removeCallbacks(progressRunnable)
+		controlsHandler.removeCallbacks(autoHideRunnable)
+		binding.videoContainer.isGone = true
+		binding.progressBuffering.isGone = true
+		playbackStarted = false
+		wasPlayingBeforePause = false
+		showButtonState()
+		BooruPlayerActivity.start(binding.root.context, item)
 	}
 
 	private fun toggleControlsVisibility() {
@@ -553,16 +498,10 @@ class VideoPageOverlay(
 		binding.buttonLoop.alpha = if (isLooping) 1f else 0.5f
 	}
 
-	private fun applySpeed(mp: MediaPlayer) {
-		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-			return
-		}
-		val wasPlaying = isPlayingSafe()
-		val params = PlaybackParams().setSpeed(SPEED_STEPS[speedIndex])
-		runCatching { mp.playbackParams = params }
-		if (wasPlaying) {
-			runCatching { mp.start() }
-		}
+	private fun updateMuteButton() {
+		binding.buttonMute.setText(
+			if (controller.isMuted) R.string.reader_video_unmute else R.string.reader_video_mute,
+		)
 	}
 
 	private fun updateSpeedButton() {
@@ -571,38 +510,30 @@ class VideoPageOverlay(
 
 	// endregion
 
-	// region audio focus
-
-	private fun requestAudioFocus() {
-		val am = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-		am.requestAudioFocus(audioFocusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
-	}
-
-	private fun abandonAudioFocus() {
-		val am = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-		am.abandonAudioFocus(audioFocusListener)
-	}
-
-	// endregion
-
 	// region lifecycle
 
 	override fun onPause(owner: LifecycleOwner) {
-		if (isPlayingSafe()) {
-			lifecycleAutoPaused = true
-			pausePlayback()
-		}
+		// page lost focus (paged swipe, app background): pause + detach -
+		// reader videos never play on in the background (TSD non-goal §1.3)
+		controller.detach(this)
 	}
 
 	override fun onResume(owner: LifecycleOwner) {
-		if (lifecycleAutoPaused && prepared) {
-			lifecycleAutoPaused = false
-			startPlaybackResume()
+		if (!isHandling) return
+		val page = boundPage ?: return
+		when {
+			// webtoon drives attach from the center-scroll listener instead
+			controller.mode == ReaderSharedMediaController.Mode.WEBTOON -> Unit
+			!playbackStarted -> startFromAutoPlay()
+			wasPlayingBeforePause -> {
+				wasPlayingBeforePause = false
+				currentStreamUrl?.let { url -> controller.attach(this, binding.videoSurface, buildItem(page, url)) }
+			}
 		}
 	}
 
 	override fun onDestroy(owner: LifecycleOwner) {
-		releasePlayer()
+		reset()
 	}
 
 	// endregion
@@ -635,16 +566,12 @@ class VideoPageOverlay(
 					Snackbar.make(binding.root, R.string.video_saved, Snackbar.LENGTH_LONG).show()
 				}
 				binding.progressVideo.isGone = true
-				if (!prepared) {
-					binding.progressBuffering.isGone = true
-				}
+				binding.progressBuffering.isGone = true
 			} catch (e: CancellationException) {
 				throw e
 			} catch (e: Throwable) {
 				binding.progressVideo.isGone = true
-				if (!prepared) {
-					binding.progressBuffering.isGone = true
-				}
+				binding.progressBuffering.isGone = true
 				Snackbar.make(
 					binding.root,
 					e.getDisplayMessage(binding.root.resources),
@@ -766,9 +693,6 @@ class VideoPageOverlay(
 		private const val VLC_PACKAGE = "org.videolan.vlc"
 		private const val SAVE_BASE_NAME = "booru-video-"
 		private const val FALLBACK_EXTENSION = "mp4"
-
-		private const val HEADER_USER_AGENT = "User-Agent"
-		private const val HEADER_REFERER = "Referer"
 
 		private const val SKIP_MS = 10_000
 		private const val PROGRESS_INTERVAL_MS = 250L

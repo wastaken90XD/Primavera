@@ -159,6 +159,10 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 	val isMediaVideoLoop: Boolean
 		get() = prefs.getBoolean(KEY_MEDIA_VIDEO_LOOP, false)
 
+	/** TSD-BOORU-MMBD-001 §3.3: reader videos start muted when a video page gains focus. */
+	val isMediaReaderVideoAutoplay: Boolean
+		get() = prefs.getBoolean(KEY_MEDIA_READER_VIDEO_AUTOPLAY, false)
+
 	/** Stored as text for the settings ListPreference; unpersistable/blend values fall back to 1x. */
 	val mediaDefaultSpeed: Float
 		get() = prefs.getString(KEY_MEDIA_DEFAULT_SPEED, null)?.toFloatOrNull()?.coerceIn(0.5f, 3f) ?: 1f
@@ -1020,6 +1024,7 @@ class AppSettings @Inject constructor(@ApplicationContext context: Context) {
 		const val KEY_MEDIA_GIF_LOOP = "media_gif_loop"
 		const val KEY_MEDIA_GIF_FRAME_CONTROLS = "media_gif_frame_controls"
 		const val KEY_MEDIA_VIDEO_LOOP = "media_video_loop"
+		const val KEY_MEDIA_READER_VIDEO_AUTOPLAY = "media_reader_video_autoplay"
 		const val KEY_MEDIA_DEFAULT_SPEED = "media_default_speed"
 		const val KEY_MEDIA_SKIP_INTERVAL = "media_skip_interval"
 		const val KEY_MEDIA_FLOATING_SIZE = "media_floating_size"

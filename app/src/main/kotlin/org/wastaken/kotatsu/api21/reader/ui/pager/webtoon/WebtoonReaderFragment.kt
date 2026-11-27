@@ -23,6 +23,7 @@ import org.wastaken.kotatsu.api21.reader.ui.ReaderState
 import org.wastaken.kotatsu.api21.reader.ui.pager.BaseReaderAdapter
 import org.wastaken.kotatsu.api21.reader.ui.pager.BaseReaderFragment
 import org.wastaken.kotatsu.api21.reader.ui.pager.ReaderPage
+import org.wastaken.kotatsu.api21.reader.ui.media.ReaderSharedMediaController
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -46,6 +47,8 @@ class WebtoonReaderFragment : BaseReaderFragment<FragmentReaderWebtoonBinding>()
 
 	override fun onViewBindingCreated(binding: FragmentReaderWebtoonBinding, savedInstanceState: Bundle?) {
 		super.onViewBindingCreated(binding, savedInstanceState)
+		// webtoon videos attach from the center-scroll detector, never self-start
+		ReaderSharedMediaController.get(requireContext()).mode = ReaderSharedMediaController.Mode.WEBTOON
 		with(binding.recyclerView) {
 			setHasFixedSize(true)
 			adapter = readerAdapter
@@ -93,6 +96,41 @@ class WebtoonReaderFragment : BaseReaderFragment<FragmentReaderWebtoonBinding>()
 		lastVisiblePosition: Int,
 	) {
 		viewModel.onCurrentPageChanged(firstVisiblePosition, lastVisiblePosition)
+		updateCenterVideo(recyclerView)
+	}
+
+	/** The holder whose video currently owns the shared engine (center-most page). */
+	private var centerVideoHolder: WebtoonHolder? = null
+
+	/**
+	 * TSD-BOORU-MMBD-001 §3.3 center detection: the visible child nearest the
+	 * viewport center gets the shared video engine; when the center moves to a
+	 * different page the previous one is paused + detached. Non-video centers
+	 * just release the current owner.
+	 */
+	private fun updateCenterVideo(recyclerView: WebtoonRecyclerView) {
+		val lm = recyclerView.layoutManager as? androidx.recyclerview.widget.LinearLayoutManager ?: return
+		val centerY = recyclerView.height / 2
+		var bestHolder: WebtoonHolder? = null
+		var minDistance = Int.MAX_VALUE
+		for (i in 0 until lm.childCount) {
+			val child = lm.getChildAt(i) ?: continue
+			val childCenterY = (child.top + child.bottom) / 2
+			val distance = kotlin.math.abs(childCenterY - centerY)
+			if (distance < minDistance) {
+				minDistance = distance
+				bestHolder = recyclerView.getChildViewHolder(child) as? WebtoonHolder
+			}
+		}
+		val previous = centerVideoHolder
+		if (previous === bestHolder) return
+		previous?.onCenterViewportExit()
+		centerVideoHolder = bestHolder
+		if (bestHolder != null) {
+			bestHolder.onCenterViewportEnter()
+		} else {
+			ReaderSharedMediaController.get(requireContext()).detachAny()
+		}
 	}
 
 	override suspend fun onPagesChanged(pages: List<ReaderPage>, pendingState: ReaderState?) = coroutineScope {
@@ -123,6 +161,10 @@ class WebtoonReaderFragment : BaseReaderFragment<FragmentReaderWebtoonBinding>()
 			}
 		} else {
 			setItems.join()
+		}
+		// initial center evaluation: no scroll event fires for the first layout
+		viewBinding?.recyclerView?.post {
+			viewBinding?.recyclerView?.let { updateCenterVideo(it) }
 		}
 	}
 

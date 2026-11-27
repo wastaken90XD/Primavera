@@ -97,8 +97,21 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	var playbackState = PlaybackState.IDLE
 		private set
 
+	/**
+	 * Ad-hoc item played OUTSIDE the queue (TSD-BOORU-MMBD-001 reader
+	 * sessions): the mixed-media reader plays its page video through this
+	 * service (single-engine policy) without polluting the persisted booru
+	 * queue. Set by [playReaderVideo], cleared by [stopReaderVideo],
+	 * [promoteReaderVideoToQueue] or any queue navigation.
+	 */
+	private var adHocItem: BooruMediaItem? = null
+
+	/** Reader sessions start muted (TSD §3.4); only an explicit HUD tap unmutes. */
+	var readerMuted = false
+		private set
+
 	val currentItem: BooruMediaItem?
-		get() = queue.current()
+		get() = adHocItem ?: queue.current()
 
 	private val binder = LocalBinder()
 	private val listeners = ArrayList<Listener>()
@@ -272,12 +285,92 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	// region public playback API
 
 	fun playNow(item: BooruMediaItem) {
+		adHocItem = null // explicit queue playback supersedes any reader session
 		val existing = queue.items.indexOfFirst { it.id == item.id }
 		val position = if (existing >= 0) existing else queue.add(item)
 		playIndex(position)
 	}
 
+	// region reader session (TSD-BOORU-MMBD-001: mixed-media reader rides this service)
+
+	/**
+	 * Plays a single video ad-hoc for the reader: no queue mutation, muted per
+	 * [readerMuted], same engine/fallback/surface pipeline as queue playback.
+	 */
+	fun playReaderVideo(item: BooruMediaItem) {
+		adHocItem = item
+		openVideo(item)
+	}
+
+	/** Ends the reader session without touching the queue; keeps the wrapper engine resident. */
+	fun stopReaderVideo() {
+		if (adHocItem == null) return
+		adHocItem = null
+		releaseVideo(releaseEngine = false)
+		stopStreamProxy()
+		setState(PlaybackState.IDLE)
+	}
+
+	/**
+	 * Fullscreen handoff (TSD §3.4): the ad-hoc item joins the persisted queue
+	 * and unmutes WITHOUT re-sourcing - playback continues, position rides the
+	 * hibernation resume channel so the follow-up openVideo (from the player
+	 * activity's playNow) seeks back to where the reader left off.
+	 */
+	fun promoteReaderVideoToQueue(): BooruMediaItem? {
+		val item = adHocItem ?: return null
+		hibernatedItemId = item.id
+		hibernatedResumeMs = videoPosition()
+		adHocItem = null
+		setReaderMuted(false)
+		val existing = queue.items.indexOfFirst { it.id == item.id }
+		if (existing >= 0) {
+			queue.jumpTo(existing)
+		} else {
+			queue.jumpTo(queue.add(item))
+		}
+		return item
+	}
+
+	fun setReaderMuted(muted: Boolean) {
+		readerMuted = muted
+		enginePlayer?.setMuted(muted)
+		runCatching {
+			mediaPlayer?.setVolume(if (muted) 0f else 1f, if (muted) 0f else 1f)
+		}
+		// audio focus follows audibility: muted playback never steals it,
+		// unmuting a playing video gains it (TSD §3.4)
+		if (!muted && isVideoPlaying()) {
+			requestAudioFocus()
+		} else if (muted) {
+			abandonAudioFocus()
+		}
+	}
+
+	/**
+	 * Remembers the ad-hoc resume position across a detach/attach cycle
+	 * (reader scrolls away and back): rides the same hibernation channel
+	 * openVideo() already consumes.
+	 */
+	fun markAdHocResumePoint() {
+		val item = adHocItem ?: return
+		if (playbackState == PlaybackState.PLAYING || playbackState == PlaybackState.PAUSED) {
+			hibernatedItemId = item.id
+			hibernatedResumeMs = videoPosition()
+		}
+	}
+
+	/** Pauses an actively playing reader session without tearing anything down. */
+	fun pauseReaderVideo() {
+		if (playbackState == PlaybackState.PLAYING) {
+			togglePlayPause()
+		}
+	}
+
+	// endregion
+
 	fun playIndex(position: Int) {
+		adHocItem = null // queue navigation always supersedes a reader session
 		val item = queue.jumpTo(position) ?: return
 		if (item.mediaType == BooruMediaType.VIDEO) {
 			openVideo(item)
@@ -319,7 +412,11 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 			// brings the UI back resurrects playback from the saved position
 			val item = currentItem
 			if (item != null && item.mediaType == BooruMediaType.VIDEO && item.id == hibernatedItemId) {
-				playIndex(queue.index)
+				if (adHocItem?.id == item.id) {
+					playReaderVideo(item)
+				} else {
+					playIndex(queue.index)
+				}
 			}
 			return
 		}
@@ -572,10 +669,12 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 				onVideoSizeChanged?.invoke(videoWidth, videoHeight)
 			}
 			runCatching { engine.setSpeed(speed) }
+			engine.setMuted(readerMuted)
 			val resumeMs = pendingResumeMs
 			pendingResumeMs = 0
 			if (resumeMs > 0) runCatching { engine.seekTo(resumeMs.toLong()) }
-			requestAudioFocus()
+			// muted reader sessions never take audio focus (TSD §3.4)
+			if (!readerMuted) requestAudioFocus()
 			setState(PlaybackState.PLAYING)
 		}
 
@@ -599,6 +698,9 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 					engine.seekTo(0)
 					engine.resume()
 				}
+			} else if (adHocItem != null) {
+				// reader sessions never advance the queue (TSD §1.3)
+				setState(PlaybackState.IDLE)
 			} else {
 				val next = queue.nextIndex()
 				if (next >= 0) playIndex(next) else setState(PlaybackState.IDLE)
@@ -661,10 +763,11 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 				runCatching { mp.playbackParams = mp.playbackParams.setSpeed(speed) }
 			}
 			runCatching { mp.isLooping = videoLooping }
+			runCatching { mp.setVolume(if (readerMuted) 0f else 1f, if (readerMuted) 0f else 1f) }
 			val resumeMs = pendingResumeMs
 			pendingResumeMs = 0
 			if (resumeMs > 0) runCatching { mp.seekTo(resumeMs) }
-			requestAudioFocus()
+			if (!readerMuted) requestAudioFocus()
 			mp.start()
 			setState(PlaybackState.PLAYING)
 		}
@@ -785,6 +888,14 @@ class BooruMediaService : Service(), BooruMediaQueue.Listener {
 	// endregion
 
 	private fun autoAdvance() {
+		if (adHocItem != null) {
+			// reader sessions never advance the queue (TSD §1.3); looping was
+			// already handled inside the player (isLooping), reaching here
+			// means "finished": stop, no auto-hibernate grace needed
+			setState(PlaybackState.IDLE)
+			hibernateEngine(allowSurfaceBound = true)
+			return
+		}
 		when (queue.repeatMode) {
 			RepeatMode.ONE -> {
 				mediaPlayer?.let { runCatching { it.seekTo(0); it.start() } } ?: playIndex(queue.index)
