@@ -2,7 +2,7 @@ package org.wastaken.kotatsu.api21.reader.ui.media
 
 import android.content.Context
 import android.util.LruCache
-import dagger.hilt.EntryPointAccessors
+import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
