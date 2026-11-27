@@ -167,6 +167,36 @@ open class RemoteListViewModel @Inject constructor(
 	}
 
 	/**
+	 * Selection-mode save (booru grid "Save image" CAB action): resolves every
+	 * selected post through the same pipeline as [saveBooruImage] and persists
+	 * them in a single [PageSaveHelper.save] batch, so the result snackbar fires
+	 * once for the whole selection. Non-booru items and posts that fail to
+	 * resolve are skipped individually instead of sinking the batch.
+	 */
+	fun saveBooruImages(pageSaveHelper: PageSaveHelper, mangas: Collection<Manga>) {
+		launchLoadingJob(Dispatchers.Default) {
+			val tasks = mangas.mapNotNull { manga ->
+				if (!manga.source.isBooruSource()) {
+					return@mapNotNull null
+				}
+				runCatching {
+					val details = repository.getDetails(manga)
+					val chapter = checkNotNull(details.chapters?.firstOrNull()) { "No pages found" }
+					val page = checkNotNull(repository.getPages(chapter).firstOrNull()) { "No pages found" }
+					PageSaveHelper.Task(
+						manga = manga,
+						chapterId = chapter.id,
+						pageNumber = 1,
+						page = page,
+					)
+				}.getOrNull()
+			}
+			check(tasks.isNotEmpty()) { "No pages found" }
+			onImageSaved.call(pageSaveHelper.save(tasks))
+		}
+	}
+
+	/**
 	 * Booru sources get the square-thumbnail grid treatment (see BooruGridAdapter):
 	 * their posts are standalone images, not manga covers.
 	 */

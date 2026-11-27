@@ -6,6 +6,7 @@ import android.view.Menu
 import android.view.MenuInflater
 import android.view.MenuItem
 import android.view.View
+import androidx.appcompat.view.ActionMode
 import androidx.core.view.MenuProvider
 import androidx.fragment.app.viewModels
 import androidx.recyclerview.widget.GridLayoutManager
@@ -302,6 +303,27 @@ class RemoteListFragment : MangaListFragment(), FilterCoordinator.Owner {
 	): Boolean {
 		menuInflater.inflate(R.menu.mode_remote, menu)
 		return super.onCreateActionMode(controller, menuInflater, menu)
+	}
+
+	override fun onPrepareActionMode(
+		controller: ListSelectionController,
+		mode: ActionMode?,
+		menu: Menu
+	): Boolean {
+		// booru posts are standalone media, not chaptered manga: the selection
+		// bar offers a direct "Save image" that skips the chapter-download dialog
+		menu.findItem(R.id.action_save_image)?.isVisible = viewModel.isBooru
+		return super.onPrepareActionMode(controller, mode, menu)
+	}
+
+	override fun onActionItemClicked(controller: ListSelectionController, mode: ActionMode?, item: MenuItem): Boolean {
+		if (item.itemId == R.id.action_save_image && viewModel.isBooru) {
+			// one batch for the whole selection, single post or many
+			viewModel.saveBooruImages(pageSaveHelper, selectedItems)
+			mode?.finish()
+			return true
+		}
+		return super.onActionItemClicked(controller, mode, item)
 	}
 
 	override fun onFilterClick(view: View?) {
