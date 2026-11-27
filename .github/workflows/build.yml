@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [ devel ]
+    branches: [ devel, "arena/**" ]
   pull_request:
     branches: [ devel ]
   workflow_dispatch:
@@ -10,6 +10,9 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -25,15 +28,94 @@ jobs:
           java-version: 17
 
       - uses: gradle/actions/setup-gradle@v4
-      
+
       - name: Generate binding classes
-        run: ./gradlew dataBindingGenBaseClassesDebug kspDebugKotlin --no-daemon
+        run: |
+          set -o pipefail
+          ./gradlew dataBindingGenBaseClassesDebug kspDebugKotlin --no-daemon 2>&1 | tee build.log
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug --no-daemon 2>&1 | tee -a build.log
+
+      - name: Extract Kotlin/Java compile errors
+        if: always()
+        run: |
+          # kotlinc prints `e: file://...`, javac prints `...: error: ...`; the
+          # gradle banner + "What went wrong" block carry task-level failures
+          touch build.log
+          grep -hE "^e: |: error: |^error: |FAILURE: Build failed|> What went wrong|> Execution failed|Caused by:" build.log \
+            | head -n 150 > compile-errors.txt || true
+          if [ -s compile-errors.txt ]; then
+            {
+              echo "## ❌ Build failed — compiler diagnostics"
+              echo '```text'
+              cat compile-errors.txt
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload compile diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-errors
+          path: compile-errors.txt
+          retention-days: 3
 
       - uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 7
+
+  ci-report:
+    name: ci-report
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Download compile diagnostics
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: compile-errors
+          path: ci-diag
+
+      - name: Publish report + sticky PR comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RES_BUILD: ${{ needs.build.result }}
+        run: |
+          ERRORS=$(cat ci-diag/compile-errors.txt 2>/dev/null || true)
+          {
+            printf '%s\n' "<!-- primavera-ci-report -->"
+            printf '%s\n' "## Primavera CI Report (\`${GITHUB_SHA:0:7}\`)"
+            printf '\n'
+            printf '%s\n' "| Job | Status |"
+            printf '%s\n' "| :--- | :--- |"
+            printf '%s\n' "| \`build\` (\`assembleDebug\`) | **${RES_BUILD}** |"
+            if [ -n "${ERRORS}" ]; then
+              printf '\n### Compiler diagnostics\n```text\n%s\n```\n' "${ERRORS}"
+            fi
+          } > report.md
+          cat report.md >> "${GITHUB_STEP_SUMMARY}"
+
+          # Sticky comment on the PR for this branch (direct on PR events,
+          # head-branch lookup on push events)
+          PR_NUM="${{ github.event.pull_request.number }}"
+          if [ -z "${PR_NUM}" ]; then
+            PR_NUM=$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&head=${GITHUB_REPOSITORY_OWNER}:${GITHUB_REF_NAME}" --jq '.[0].number // empty' || true)
+          fi
+          if [ -n "${PR_NUM}" ]; then
+            COMMENT_ID=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUM}/comments" --jq '.[] | select(.body | contains("<!-- primavera-ci-report -->")) | .id' | head -n 1 || true)
+            if [ -n "${COMMENT_ID}" ]; then
+              gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" -F body=@report.md >/dev/null || true
+            else
+              gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUM}/comments" -F body=@report.md >/dev/null || true
+            fi
+          fi
