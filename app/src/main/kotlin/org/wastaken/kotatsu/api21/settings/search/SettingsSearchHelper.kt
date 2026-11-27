@@ -63,6 +63,12 @@ class SettingsSearchHelper @Inject constructor(
 		)
 		preferenceManager.inflateTo(
 			result,
+			R.xml.pref_proxy_pool,
+			listOf(context.getString(R.string.network)),
+			org.wastaken.kotatsu.api21.settings.ProxyPoolSettingsFragment::class.java,
+		)
+		preferenceManager.inflateTo(
+			result,
 			R.xml.pref_suggestions,
 			listOf(context.getString(R.string.suggestions)),
 			SuggestionsSettingsFragment::class.java,

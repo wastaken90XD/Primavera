@@ -48,7 +48,9 @@ class TypedListSpacingDecoration(
 				-> outRect.set(spacingNormal)
 
 			ListItemType.PAGE_THUMB -> outRect.set(spacingNormal)
-			ListItemType.MANGA_GRID -> outRect.set(0)
+			ListItemType.MANGA_GRID,
+			ListItemType.BOORU_GRID,
+				-> outRect.set(0) // grid tiles carry their own margins (2dp, see item layouts)
 
 			ListItemType.EXPLORE_BUTTONS -> outRect.set(spacingNormal)
 

@@ -55,6 +55,7 @@
 	<ListPreference
 		android:dependency="tracker_enabled"
 		android:entries="@array/tracker_download_strategies"
+			android:entryValues="@array/values_tracker_download_strategies"
 		android:key="tracker_download"
 		android:title="@string/download_new_chapters"
 		app:useSimpleSummaryProvider="true" />

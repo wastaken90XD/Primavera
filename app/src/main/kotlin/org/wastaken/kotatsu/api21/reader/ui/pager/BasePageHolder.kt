@@ -14,6 +14,7 @@ import androidx.viewbinding.ViewBinding
 import com.davemorrissey.labs.subscaleview.DefaultOnImageEventListener
 import com.davemorrissey.labs.subscaleview.SubsamplingScaleImageView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.wastaken.kotatsu.api21.BuildConfig
 import org.wastaken.kotatsu.api21.R
@@ -24,10 +25,18 @@ import org.wastaken.kotatsu.api21.core.util.ext.getDisplayMessage
 import org.wastaken.kotatsu.api21.core.util.ext.isLowRamDevice
 import org.wastaken.kotatsu.api21.core.util.ext.isSerializable
 import org.wastaken.kotatsu.api21.core.util.ext.observe
+import org.wastaken.kotatsu.api21.databinding.LayoutBooruGifOverlayBinding
+import org.wastaken.kotatsu.api21.databinding.LayoutBooruVideoOverlayBinding
 import org.wastaken.kotatsu.api21.databinding.LayoutPageInfoBinding
 import org.koitharu.kotatsu.parsers.util.ifZero
 import org.wastaken.kotatsu.api21.reader.domain.PageLoader
 import org.wastaken.kotatsu.api21.reader.ui.config.ReaderSettings
+import org.wastaken.kotatsu.api21.reader.ui.media.GifPageOverlay
+import org.wastaken.kotatsu.api21.reader.ui.media.ReaderMediaProbe
+import org.wastaken.kotatsu.api21.reader.ui.media.ReaderMediaType
+import org.wastaken.kotatsu.api21.reader.ui.media.VideoPageOverlay
+import org.wastaken.kotatsu.api21.reader.ui.media.isBooruSource
+import org.wastaken.kotatsu.api21.reader.ui.media.looksLikeMedia
 import org.wastaken.kotatsu.api21.reader.ui.pager.vm.PageState
 import org.wastaken.kotatsu.api21.reader.ui.pager.vm.PageViewModel
 import org.wastaken.kotatsu.api21.reader.ui.pager.webtoon.WebtoonHolder
@@ -49,6 +58,22 @@ abstract class BasePageHolder<B : ViewBinding>(
 		isWebtoon = this is WebtoonHolder,
 	)
 	protected val bindingInfo = LayoutPageInfoBinding.bind(binding.root)
+	// The overlay bindings MUST be created from the overlay's own subtree root
+	// (found by id): ViewBinding.bind(rootView) returns a binding whose root is
+	// the passed view, so binding the whole page root would let the overlay
+	// hide the entire page (blank reader regression).
+	private val gifOverlay = GifPageOverlay(
+		LayoutBooruGifOverlayBinding.bind(
+			requireNotNull(binding.root.findViewById(R.id.booru_gif_overlay_root)),
+		),
+		this,
+	)
+	private val videoOverlay = VideoPageOverlay(
+		LayoutBooruVideoOverlayBinding.bind(
+			requireNotNull(binding.root.findViewById(R.id.booru_video_overlay_root)),
+		),
+		this,
+	)
 	protected abstract val ssiv: SubsamplingScaleImageView
 
 	protected val settings: ReaderSettings
@@ -99,8 +124,53 @@ abstract class BasePageHolder<B : ViewBinding>(
 
 	fun bind(data: ReaderPage) {
 		boundData = data
-		viewModel.onBind(data.toMangaPage())
+		mediaProbeJob?.cancel()
+		mediaProbeJob = null
+		// both overlays must always be told about the bind (they reset themselves
+		// internally, so evaluate eagerly without short-circuiting); a page
+		// cannot be a gif and a video at once
+		val gifHandled = gifOverlay.onBind(data)
+		val videoHandled = videoOverlay.onBind(data)
+		val mediaHandled = gifHandled || videoHandled
+		if (mediaHandled) {
+			// media pages (gif/video) are explicit-load only: the automatic page
+			// pipeline is suppressed and the overlay drives everything from here
+			viewModel.onRecycle()
+			ssiv.recycle()
+		} else {
+			viewModel.onBind(data.toMangaPage())
+			probeLateMedia(data)
+		}
 		onBind(data)
+	}
+
+	/**
+	 * TSD-BOORU-MMBD-001 M1 late classification: extension-less/signed CDN URLs
+	 * defeat the URL checks, so for media-enabled booru sources the image
+	 * pipeline starts AND a Content-Type/magic-byte probe runs in parallel; a
+	 * GIF/VIDEO verdict swaps the page to its overlay (the partial image load
+	 * is recycled). Static images are never disturbed (probe verdict IMAGE).
+	 */
+	private fun probeLateMedia(data: ReaderPage) {
+		if (!data.source.isBooruSource() || data.url.looksLikeMedia()) {
+			return
+		}
+		mediaProbeJob = lifecycleScope.launch {
+			val verdict = ReaderMediaProbe.probe(context.applicationContext, data) ?: return@launch
+			// rebind happened while the probe flew: this verdict is for a stale page
+			if (boundData != data || gifOverlay.isHandling || videoOverlay.isHandling) {
+				return@launch
+			}
+			val takenOver = when (verdict) {
+				ReaderMediaType.VIDEO -> videoOverlay.onBindForced(data)
+				ReaderMediaType.GIF -> gifOverlay.onBindForced(data)
+				else -> false
+			}
+			if (takenOver) {
+				viewModel.onRecycle()
+				ssiv.recycle()
+			}
+		}
 	}
 
 	@CallSuper
@@ -135,8 +205,23 @@ abstract class BasePageHolder<B : ViewBinding>(
 
 	open fun onDetachedFromWindow() = Unit
 
+	/** Webtoon center-viewport hooks (TSD-BOORU-MMBD-001 §3.3): only the center-most video plays. */
+	fun onCenterViewportEnter() {
+		videoOverlay.onCenterSelected()
+	}
+
+	fun onCenterViewportExit() {
+		videoOverlay.onCenterCleared()
+	}
+
+	private var mediaProbeJob: Job? = null
+
 	@CallSuper
 	open fun onRecycled() {
+		mediaProbeJob?.cancel()
+		mediaProbeJob = null
+		gifOverlay.onRecycled()
+		videoOverlay.onRecycled()
 		viewModel.onRecycle()
 		ssiv.recycle()
 	}
@@ -151,6 +236,12 @@ abstract class BasePageHolder<B : ViewBinding>(
 	final override fun onLowMemory() = onTrimMemory(TRIM_MEMORY_COMPLETE)
 
 	protected open fun onStateChanged(state: PageState) {
+		if (gifOverlay.isHandling || videoOverlay.isHandling) {
+			// media pages are driven by their overlay, not by the page state flow
+			bindingInfo.layoutError.isGone = true
+			bindingInfo.layoutProgress.isGone = true
+			return
+		}
 		bindingInfo.layoutError.isVisible = state is PageState.Error
 		bindingInfo.layoutProgress.isGone = state.isFinalState()
 		val progress = (state as? PageState.Loading)?.progress ?: -1

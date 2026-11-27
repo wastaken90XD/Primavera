@@ -2,6 +2,7 @@
 acra = "5.12.0"
 activity = "1.10.1"
 adapterdelegates = "4.3.2"
+androidxMedia3 = "1.5.1"
 appcompat = "1.7.1"
 avifDecoder = "1.1.1.14d8e3c4"
 biometric = "1.4.0-alpha04"
@@ -33,7 +34,7 @@ material = "1.14.0-alpha03"
 moshi = "1.15.2"
 okhttp = "4.12.0"
 okio = "3.12.0"
-parsers = "2acc45b353"
+parsers = "7a06c8c9b7"
 preference = "1.2.1"
 recyclerview = "1.4.0"
 room = "2.7.2"
@@ -62,6 +63,8 @@ androidx-constraintlayout = { module = "androidx.constraintlayout:constraintlayo
 androidx-core = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
 androidx-documentfile = { module = "androidx.documentfile:documentfile", version.ref = "documentfile" }
 androidx-fragment = { module = "androidx.fragment:fragment-ktx", version.ref = "fragment" }
+androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "androidxMedia3" }
+androidx-media3-datasource-okhttp = { module = "androidx.media3:media3-datasource-okhttp", version.ref = "androidxMedia3" }
 androidx-hilt-compiler = { module = "androidx.hilt:hilt-compiler", version.ref = "hilt" }
 androidx-hilt-work = { module = "androidx.hilt:hilt-work", version.ref = "hilt" }
 androidx-junit = { module = "androidx.test.ext:junit-ktx", version.ref = "junitKtx" }

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	Explicit-load GIF overlay for booru reader pages (see GifPageOverlay).
+	The root is not clickable, so outside the button taps fall through
+	to the reader gestures underneath.
+-->
+<FrameLayout
+	xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto"
+	xmlns:tools="http://schemas.android.com/tools"
+	android:id="@+id/booru_gif_overlay_root"
+	android:layout_width="match_parent"
+	android:layout_height="match_parent"
+	android:clickable="false"
+	android:visibility="gone"
+	tools:visibility="visible">
+
+	<ImageView
+		android:id="@+id/gifImageView"
+		android:layout_width="match_parent"
+		android:layout_height="match_parent"
+		android:scaleType="fitCenter"
+		android:visibility="gone"
+		tools:ignore="ContentDescription"
+		tools:visibility="visible" />
+
+	<com.google.android.material.card.MaterialCardView
+		android:id="@+id/panelGif"
+		android:layout_width="wrap_content"
+		android:layout_height="wrap_content"
+		android:layout_gravity="center"
+		android:visibility="visible"
+		app:cardCornerRadius="@dimen/card_indicator_size"
+		app:cardElevation="6dp">
+
+		<com.google.android.material.button.MaterialButton
+			android:id="@+id/button_load_gif"
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:layout_margin="@dimen/margin_normal"
+			android:text="@string/load_gif" />
+
+	</com.google.android.material.card.MaterialCardView>
+
+	<ProgressBar
+		android:id="@+id/progress_gif"
+		android:layout_width="wrap_content"
+		android:layout_height="wrap_content"
+		android:layout_gravity="center"
+		android:visibility="gone" />
+
+</FrameLayout>

@@ -26,10 +26,12 @@ import okio.sink
 import okio.source
 import org.wastaken.kotatsu.api21.core.LocalizedAppContext
 import org.wastaken.kotatsu.api21.core.image.BitmapDecoderCompat
+import org.wastaken.kotatsu.api21.core.network.OriginalImageDownloader
 import org.wastaken.kotatsu.api21.core.os.OpenDocumentTreeHelper
 import org.wastaken.kotatsu.api21.core.prefs.AppSettings
 import org.wastaken.kotatsu.api21.core.util.MimeTypes
 import org.wastaken.kotatsu.api21.core.util.ext.isFileUri
+import org.wastaken.kotatsu.api21.core.util.ext.isNetworkUri
 import org.wastaken.kotatsu.api21.core.util.ext.isZipUri
 import org.wastaken.kotatsu.api21.core.util.ext.toFileNameSafe
 import org.wastaken.kotatsu.api21.core.util.ext.toFileOrNull
@@ -37,6 +39,7 @@ import org.wastaken.kotatsu.api21.core.util.ext.writeAllCancellable
 import org.koitharu.kotatsu.parsers.model.Manga
 import org.koitharu.kotatsu.parsers.model.MangaPage
 import org.wastaken.kotatsu.api21.reader.domain.PageLoader
+import org.wastaken.kotatsu.api21.reader.ui.media.isBooruSource
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -48,6 +51,7 @@ class PageSaveHelper @AssistedInject constructor(
 	@LocalizedAppContext private val context: Context,
 	private val settings: AppSettings,
 	private val pageLoaderProvider: Provider<PageLoader>,
+	private val originalImageDownloader: OriginalImageDownloader,
 ) : ActivityResultCallback<Uri?> {
 
 	private val savePageRequest = activityResultCaller.registerForActivityResult(PageSaveContract(), this)
@@ -84,14 +88,37 @@ class PageSaveHelper @AssistedInject constructor(
 	private suspend fun saveImpl(task: Task): Uri {
 		val pageLoader = getPageLoader()
 		val pageUrl = pageLoader.getPageUrl(task.page).toUri()
-		val pageUri = pageLoader.loadPage(task.page, force = false)
-		val proposedName = task.getFileBaseName() + "." + getPageExtension(pageUrl, pageUri)
+		val useOriginal = isSaveOriginalForBooru(task, pageUrl)
+		val pageUri = if (useOriginal) null else pageLoader.loadPage(task.page, force = false)
+		val proposedName = task.getFileBaseName() + "." + if (pageUri != null) {
+			getPageExtension(pageUrl, pageUri)
+		} else {
+			getUrlPageExtension(pageUrl) ?: EXTENSION_FALLBACK
+		}
 		val destination = getDefaultFileUri(proposedName)?.uri ?: run {
 			val defaultUri = settings.getPagesSaveDir(context)?.uri?.buildUpon()?.appendPath(proposedName)?.toString()
 			savePageRequest.launchAndAwait(defaultUri ?: proposedName)
 		}
-		copyImpl(pageUri, destination)
+		if (pageUri != null) {
+			copyImpl(pageUri, destination)
+		} else {
+			originalImageDownloader.download(pageUrl.toString(), task.page.source, destination)
+		}
 		return destination
+	}
+
+	private suspend fun saveOriginalImpl(task: Task, destinationDir: DocumentFile): Uri {
+		val pageLoader = getPageLoader()
+		val pageUrl = pageLoader.getPageUrl(task.page).toUri()
+		val proposedName = task.getFileBaseName()
+		val ext = getUrlPageExtension(pageUrl) ?: EXTENSION_FALLBACK
+		val mime = requireNotNull(MimeTypes.getMimeTypeFromExtension("_.$ext")) {
+			"Unknown type of $proposedName"
+		}
+		val destination = destinationDir.createFile(mime.toString(), proposedName)
+		val destUri = destination?.uri ?: throw IOException("Cannot create destination file")
+		originalImageDownloader.download(pageUrl.toString(), task.page.source, destUri)
+		return destUri
 	}
 
 	private suspend fun saveImpl(tasks: Collection<Task>): Collection<Uri> {
@@ -104,6 +131,10 @@ class PageSaveHelper @AssistedInject constructor(
 		val result = ArrayList<Uri>(tasks.size)
 		for (task in tasks) {
 			val pageUrl = pageLoader.getPageUrl(task.page).toUri()
+			if (isSaveOriginalForBooru(task, pageUrl)) {
+				result.add(saveOriginalImpl(task, destinationDir))
+				continue
+			}
 			val pageUri = pageLoader.loadPage(task.page, force = false)
 			val proposedName = task.getFileBaseName()
 			val ext = getPageExtension(pageUrl, pageUri)
@@ -117,19 +148,27 @@ class PageSaveHelper @AssistedInject constructor(
 		return result
 	}
 
+	private fun isSaveOriginalForBooru(task: Task, pageUrl: Uri): Boolean {
+		// strictly booru-only: for every other source the standard save action keeps
+		// its upstream behaviour (cached copy), the preference does not change it
+		return settings.isPagesSaveOriginalEnabled &&
+			task.page.source.isBooruSource() &&
+			pageUrl.isNetworkUri()
+	}
+
 	private suspend fun getPageExtension(url: Uri, fileUri: Uri): String {
-		val name = requireNotNull(
-			if (url.isZipUri()) {
-				url.fragment?.substringAfterLast(File.separatorChar)
-			} else {
-				url.lastPathSegment
-			},
-		) { "Invalid page url: $url" }
-		var extension = name.substringAfterLast('.', "")
-		if (extension.length !in 2..4) {
-			extension = fileUri.toFileOrNull()?.let { file -> getImageExtension(file) } ?: EXTENSION_FALLBACK
-		}
-		return extension
+		return getUrlPageExtension(url)
+			?: fileUri.toFileOrNull()?.let { file -> getImageExtension(file) }
+			?: EXTENSION_FALLBACK
+	}
+
+	private fun getUrlPageExtension(url: Uri): String? {
+		val name = if (url.isZipUri()) {
+			url.fragment?.substringAfterLast(File.separatorChar)
+		} else {
+			url.lastPathSegment
+		} ?: return null
+		return name.substringAfterLast('.', "").takeIf { it.length in 2..4 }
 	}
 
 	private suspend fun <I> ActivityResultLauncher<I>.launchAndAwait(input: I): Uri {

@@ -12,6 +12,7 @@ import org.wastaken.kotatsu.api21.core.util.ext.isAnimationsEnabled
 import org.wastaken.kotatsu.api21.core.util.ext.observe
 import org.wastaken.kotatsu.api21.reader.ui.ReaderState
 import org.wastaken.kotatsu.api21.reader.ui.ReaderViewModel
+import org.wastaken.kotatsu.api21.reader.ui.media.ReaderSharedMediaController
 
 abstract class BaseReaderFragment<B : ViewBinding> : BaseFragment<B>(), ZoomControl.ZoomControlListener {
 
@@ -43,6 +44,9 @@ abstract class BaseReaderFragment<B : ViewBinding> : BaseFragment<B>(), ZoomCont
 	override fun onDestroyView() {
 		viewModel.saveCurrentState(getCurrentState())
 		readerAdapter = null
+		// end any reader video session: detach, release the ad-hoc service
+		// session and unbind (TSD-BOORU-MMBD-001 single-engine lifecycle)
+		ReaderSharedMediaController.releaseInstance()
 		super.onDestroyView()
 	}
 

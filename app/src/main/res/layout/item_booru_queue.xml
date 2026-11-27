@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto"
+	android:layout_width="match_parent"
+	android:layout_height="wrap_content"
+	android:background="?attr/selectableItemBackground"
+	android:padding="6dp">
+
+	<LinearLayout
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:gravity="center_vertical"
+		android:orientation="horizontal">
+
+		<org.wastaken.kotatsu.api21.image.ui.CoverImageView
+			android:id="@+id/thumbnail"
+			android:layout_width="48dp"
+			android:layout_height="48dp"
+			android:background="?colorSurfaceContainer"
+			android:scaleType="centerCrop"
+			app:aspectRationHeight="1"
+			app:aspectRationWidth="1" />
+
+		<LinearLayout
+			android:layout_width="0dp"
+			android:layout_height="wrap_content"
+			android:layout_marginStart="8dp"
+			android:layout_weight="1"
+			android:orientation="vertical">
+
+			<TextView
+				android:id="@+id/title"
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:ellipsize="end"
+				android:maxLines="2"
+				android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+			<LinearLayout
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:orientation="horizontal">
+
+				<TextView
+					android:id="@+id/mediaBadge"
+					android:layout_width="wrap_content"
+					android:layout_height="wrap_content"
+					android:textAppearance="?attr/textAppearanceLabelMedium" />
+
+				<TextView
+					android:id="@+id/sourceName"
+					android:layout_width="wrap_content"
+					android:layout_height="wrap_content"
+					android:layout_marginStart="6dp"
+					android:textAppearance="?attr/textAppearanceLabelMedium" />
+
+			</LinearLayout>
+
+		</LinearLayout>
+
+		<ImageButton
+			android:id="@+id/buttonRemove"
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:background="?attr/selectableItemBackgroundBorderless"
+			android:contentDescription="@string/clear"
+			app:srcCompat="@drawable/ic_delete" />
+
+		<ImageView
+			android:id="@+id/dragHandle"
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:contentDescription="@string/media_queue_title"
+			android:padding="8dp"
+			app:srcCompat="@drawable/ic_list" />
+
+	</LinearLayout>
+
+</FrameLayout>

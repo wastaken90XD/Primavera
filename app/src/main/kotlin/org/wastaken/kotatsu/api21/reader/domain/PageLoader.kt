@@ -71,6 +71,7 @@ import org.koitharu.kotatsu.parsers.model.MangaPage
 import org.koitharu.kotatsu.parsers.model.MangaSource
 import org.koitharu.kotatsu.parsers.util.requireBody
 import org.koitharu.kotatsu.parsers.util.runCatchingCancellable
+import org.wastaken.kotatsu.api21.reader.ui.media.isBooruMedia
 import org.wastaken.kotatsu.api21.reader.ui.pager.ReaderPage
 import java.io.File
 import java.util.LinkedList
@@ -118,6 +119,10 @@ class PageLoader @Inject constructor(
 	fun prefetch(pages: List<ReaderPage>) = loaderScope.launch {
 		prefetchLock.withLock {
 			for (page in pages.asReversed()) {
+				if (page.isBooruMedia(settings)) {
+					// gif/video booru pages are explicit-load only: never prefetch multi-MB media
+					continue
+				}
 				if (tasks.containsKey(page.id)) {
 					continue
 				}

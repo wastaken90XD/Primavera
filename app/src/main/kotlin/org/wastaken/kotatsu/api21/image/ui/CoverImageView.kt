@@ -32,6 +32,7 @@ import org.wastaken.kotatsu.api21.core.exceptions.UnsupportedSourceException
 import org.wastaken.kotatsu.api21.core.image.CoilImageView
 import org.wastaken.kotatsu.api21.core.ui.image.AnimatedPlaceholderDrawable
 import org.wastaken.kotatsu.api21.core.ui.image.TextDrawable
+import org.wastaken.kotatsu.api21.booru.media.BlurTransformation
 import org.wastaken.kotatsu.api21.core.ui.image.TrimTransformation
 import org.wastaken.kotatsu.api21.core.util.ext.bookmarkExtra
 import org.wastaken.kotatsu.api21.core.util.ext.decodeRegion
@@ -60,6 +61,9 @@ class CoverImageView @JvmOverloads constructor(
 	private var aspectRationHeight: Int = 0
 	private var aspectRationWidth: Int = 0
 	var trimImage: Boolean = false
+
+	/** 0 = off; 1..25 chains a BlurTransformation onto every request (booru "Blur thumbnails"). */
+	var blurRadius: Int = 0
 
 	private val hasAspectRatio: Boolean
 		get() = aspectRationHeight > 0 && aspectRationWidth > 0
@@ -161,8 +165,13 @@ class CoverImageView @JvmOverloads constructor(
 	)
 
 	override fun newRequestBuilder() = super.newRequestBuilder().apply {
-		if (trimImage) {
-			transformations(listOf(TrimTransformation()))
+		if (trimImage || blurRadius > 0) {
+			transformations(
+				buildList {
+					if (trimImage) add(TrimTransformation())
+					if (blurRadius > 0) add(BlurTransformation(blurRadius))
+				},
+			)
 		}
 		if (hasAspectRatio) {
 			size(CoverSizeResolver(this@CoverImageView))

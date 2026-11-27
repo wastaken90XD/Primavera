@@ -44,6 +44,8 @@
 	<dimen name="card_indicator_size">32dp</dimen>
 	<dimen name="card_indicator_size_small">24dp</dimen>
 	<dimen name="card_indicator_offset">8dp</dimen>
+	<!-- fixed height of the gif/video placeholder panel in the webtoon reader (wrap_content parent) -->
+	<dimen name="booru_media_overlay_height">280dp</dimen>
 
 	<dimen name="chapter_check_size">16dp</dimen>
 	<dimen name="chapter_check_offset">6dp</dimen>

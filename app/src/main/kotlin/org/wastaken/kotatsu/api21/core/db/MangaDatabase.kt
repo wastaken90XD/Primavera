@@ -43,6 +43,7 @@ import org.wastaken.kotatsu.api21.core.db.migrations.Migration24To23
 import org.wastaken.kotatsu.api21.core.db.migrations.Migration24To25
 import org.wastaken.kotatsu.api21.core.db.migrations.Migration25To26
 import org.wastaken.kotatsu.api21.core.db.migrations.Migration26To27
+import org.wastaken.kotatsu.api21.core.db.migrations.Migration27To28
 import org.wastaken.kotatsu.api21.core.db.migrations.Migration2To3
 import org.wastaken.kotatsu.api21.core.db.migrations.Migration3To4
 import org.wastaken.kotatsu.api21.core.db.migrations.Migration4To5
@@ -57,6 +58,9 @@ import org.wastaken.kotatsu.api21.favourites.data.FavouriteCategoryEntity
 import org.wastaken.kotatsu.api21.favourites.data.FavouriteEntity
 import org.wastaken.kotatsu.api21.favourites.data.FavouritesDao
 import org.wastaken.kotatsu.api21.history.data.HistoryDao
+import org.wastaken.kotatsu.api21.booru.data.BooruPlaylistEntity
+import org.wastaken.kotatsu.api21.booru.data.BooruPlaylistItemEntity
+import org.wastaken.kotatsu.api21.booru.data.BooruPlaylistsDao
 import org.wastaken.kotatsu.api21.history.data.HistoryEntity
 import org.wastaken.kotatsu.api21.local.data.index.LocalMangaIndexDao
 import org.wastaken.kotatsu.api21.local.data.index.LocalMangaIndexEntity
@@ -70,7 +74,7 @@ import org.wastaken.kotatsu.api21.tracker.data.TrackEntity
 import org.wastaken.kotatsu.api21.tracker.data.TrackLogEntity
 import org.wastaken.kotatsu.api21.tracker.data.TracksDao
 
-const val DATABASE_VERSION = 27
+const val DATABASE_VERSION = 28
 
 @Database(
 	entities = [
@@ -78,6 +82,7 @@ const val DATABASE_VERSION = 27
 		FavouriteCategoryEntity::class, FavouriteEntity::class, MangaPrefsEntity::class, TrackEntity::class,
 		TrackLogEntity::class, SuggestionEntity::class, BookmarkEntity::class, ScrobblingEntity::class,
 		MangaSourceEntity::class, StatsEntity::class, LocalMangaIndexEntity::class,
+		BooruPlaylistEntity::class, BooruPlaylistItemEntity::class,
 	],
 	version = DATABASE_VERSION,
 )
@@ -111,6 +116,8 @@ abstract class MangaDatabase : RoomDatabase() {
 
 	abstract fun getLocalMangaIndexDao(): LocalMangaIndexDao
 
+	abstract fun getBooruPlaylistsDao(): BooruPlaylistsDao
+
 	abstract fun getChaptersDao(): ChaptersDao
 }
 
@@ -142,6 +149,7 @@ fun getDatabaseMigrations(context: Context): Array<Migration> = arrayOf(
 	Migration24To25(),
 	Migration25To26(),
 	Migration26To27(),
+	Migration27To28(),
 )
 
 fun MangaDatabase(context: Context): MangaDatabase = Room

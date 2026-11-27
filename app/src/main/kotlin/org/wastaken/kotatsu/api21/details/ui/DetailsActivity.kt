@@ -88,6 +88,7 @@ import org.wastaken.kotatsu.api21.databinding.LayoutDetailsTableBinding
 import org.wastaken.kotatsu.api21.details.data.MangaDetails
 import org.wastaken.kotatsu.api21.details.data.ReadingTime
 import org.wastaken.kotatsu.api21.details.service.MangaPrefetchService
+import org.wastaken.kotatsu.api21.details.ui.pager.pages.PagesSavedObserver
 import org.wastaken.kotatsu.api21.details.ui.model.ChapterListItem
 import org.wastaken.kotatsu.api21.details.ui.model.HistoryInfo
 import org.wastaken.kotatsu.api21.details.ui.scrobbling.ScrobblingItemDecoration
@@ -106,6 +107,7 @@ import org.koitharu.kotatsu.parsers.model.MangaTag
 import org.koitharu.kotatsu.parsers.util.ifNullOrEmpty
 import org.koitharu.kotatsu.parsers.util.nullIfEmpty
 import org.koitharu.kotatsu.parsers.util.toTitleCase
+import org.wastaken.kotatsu.api21.reader.ui.PageSaveHelper
 import org.wastaken.kotatsu.api21.scrobbling.common.domain.model.ScrobblingInfo
 import javax.inject.Inject
 import kotlin.math.roundToInt
@@ -132,9 +134,13 @@ class DetailsActivity :
 	@Inject
 	lateinit var settings: AppSettings
 
+	@Inject
+	lateinit var pageSaveHelperFactory: PageSaveHelper.Factory
+
 	private val viewModel: DetailsViewModel by viewModels()
 	private lateinit var menuProvider: DetailsMenuProvider
 	private lateinit var infoBinding: LayoutDetailsTableBinding
+	private lateinit var pageSaveHelper: PageSaveHelper
 
 	override val bottomSheet: View?
 		get() = viewBinding.containerBottomSheet
@@ -143,6 +149,7 @@ class DetailsActivity :
 		super.onCreate(savedInstanceState)
 		setContentView(ActivityDetailsBinding.inflate(layoutInflater))
 		infoBinding = LayoutDetailsTableBinding.bind(viewBinding.root)
+		pageSaveHelper = pageSaveHelperFactory.create(this)
 		setDisplayHomeAsUp(isEnabled = true, showUpAsClose = false)
 		supportActionBar?.setDisplayShowTitleEnabled(false)
 		viewBinding.chipFavorite.setOnClickListener(this)
@@ -198,11 +205,14 @@ class DetailsActivity :
 		viewModel.onDownloadStarted
 			.filterNot { appRouter.isChapterPagesSheetShown() }
 			.observeEvent(this, DownloadStartedObserver(viewBinding.scrollView))
+		viewModel.onImageSaved
+			.observeEvent(this, PagesSavedObserver(viewBinding.scrollView))
 		menuProvider = DetailsMenuProvider(
 			activity = this,
 			viewModel = viewModel,
 			snackbarHost = viewBinding.scrollView,
 			appShortcutManager = shortcutManager,
+			pageSaveHelper = pageSaveHelper,
 		)
 		addMenuProvider(menuProvider)
 	}

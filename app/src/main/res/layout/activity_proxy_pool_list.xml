@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto"
+	android:layout_width="match_parent"
+	android:layout_height="match_parent"
+	android:orientation="vertical">
+
+	<com.google.android.material.appbar.AppBarLayout
+		android:id="@+id/appbar"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content">
+
+		<com.google.android.material.appbar.MaterialToolbar
+			android:id="@+id/toolbar"
+			android:layout_width="match_parent"
+			android:layout_height="?attr/actionBarSize"
+			app:navigationIconTint="?attr/colorControlNormal"
+			app:subtitleTextColor="?android:attr/textColorSecondary"
+			android:title="@string/proxy_pool" />
+	</com.google.android.material.appbar.AppBarLayout>
+
+	<com.google.android.material.textfield.TextInputLayout
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:hint="@string/search_hint">
+
+		<com.google.android.material.textfield.TextInputEditText
+			android:id="@+id/inputSearch"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:imeOptions="actionSearch"
+			android:inputType="text"
+			android:maxLines="1" />
+	</com.google.android.material.textfield.TextInputLayout>
+
+	<HorizontalScrollView
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:scrollbars="none">
+
+		<LinearLayout
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:orientation="horizontal">
+
+			<com.google.android.material.checkbox.MaterialCheckBox
+				android:id="@+id/checkAlive"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_filter_alive" />
+
+			<com.google.android.material.checkbox.MaterialCheckBox
+				android:id="@+id/checkPicked"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:checked="true"
+				android:text="@string/pool_filter_picked" />
+
+			<com.google.android.material.checkbox.MaterialCheckBox
+				android:id="@+id/checkManual"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:checked="true"
+				android:text="@string/pool_filter_manual" />
+
+			<com.google.android.material.checkbox.MaterialCheckBox
+				android:id="@+id/checkDead"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_filter_dead" />
+
+			<com.google.android.material.checkbox.MaterialCheckBox
+				android:id="@+id/checkBanned"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_filter_banned" />
+		</LinearLayout>
+	</HorizontalScrollView>
+
+	<TextView
+		android:id="@+id/textSummary"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:paddingHorizontal="16dp"
+		android:paddingVertical="4dp"
+		android:textColor="?android:attr/textColorSecondary"
+		android:textSize="13sp" />
+
+	<TextView
+		android:id="@+id/textChainPreview"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:paddingHorizontal="16dp"
+		android:paddingBottom="4dp"
+		android:textColor="?android:attr/textColorSecondary"
+		android:textSize="12sp" />
+
+	<HorizontalScrollView
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:scrollbars="none">
+
+		<LinearLayout
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:orientation="horizontal">
+
+			<com.google.android.material.button.MaterialButton
+				android:id="@+id/buttonRefresh"
+				style="@style/Widget.Material3.Button.TonalButton"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/refresh" />
+
+			<com.google.android.material.button.MaterialButton
+				android:id="@+id/buttonTestVisible"
+				style="@style/Widget.Material3.Button.TonalButton"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_action_test_visible" />
+
+			<com.google.android.material.button.MaterialButton
+				android:id="@+id/buttonTestSelected"
+				style="@style/Widget.Material3.Button.TonalButton"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_action_test_selected" />
+
+			<com.google.android.material.button.MaterialButton
+				android:id="@+id/buttonTestAlive"
+				style="@style/Widget.Material3.Button.TonalButton"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_action_test_all_alive" />
+
+			<com.google.android.material.button.MaterialButton
+				android:id="@+id/buttonSelectAlive"
+				style="@style/Widget.Material3.Button.TonalButton"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_action_select_alive" />
+
+			<com.google.android.material.button.MaterialButton
+				android:id="@+id/buttonClearSelection"
+				style="@style/Widget.Material3.Button.TonalButton"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_action_clear_selection" />
+		</LinearLayout>
+	</HorizontalScrollView>
+
+	<HorizontalScrollView
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:scrollbars="none">
+
+		<LinearLayout
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:orientation="horizontal">
+
+			<com.google.android.material.button.MaterialButton
+				android:id="@+id/buttonBan"
+				style="@style/Widget.Material3.Button.TonalButton"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_action_ban" />
+
+			<com.google.android.material.button.MaterialButton
+				android:id="@+id/buttonUnban"
+				style="@style/Widget.Material3.Button.TonalButton"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_action_unban" />
+
+			<com.google.android.material.button.MaterialButton
+				android:id="@+id/buttonRemove"
+				style="@style/Widget.Material3.Button.TonalButton"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_action_remove" />
+
+			<com.google.android.material.button.MaterialButton
+				android:id="@+id/buttonCopy"
+				style="@style/Widget.Material3.Button.TonalButton"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_action_copy" />
+
+			<com.google.android.material.button.MaterialButton
+				android:id="@+id/buttonAdd"
+				style="@style/Widget.Material3.Button.TonalButton"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_add_manual_title" />
+
+			<com.google.android.material.button.MaterialButton
+				android:id="@+id/buttonSort"
+				style="@style/Widget.Material3.Button.TonalButton"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:text="@string/pool_sort_host" />
+		</LinearLayout>
+	</HorizontalScrollView>
+
+	<androidx.recyclerview.widget.RecyclerView
+		android:id="@+id/recyclerView"
+		android:layout_width="match_parent"
+		android:layout_height="0dp"
+		android:layout_weight="1"
+		android:clipToPadding="false" />
+
+	<TextView
+		android:id="@+id/buttonLoadMore"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:background="?attr/selectableItemBackground"
+		android:gravity="center"
+		android:minHeight="48dp"
+		android:padding="12dp"
+		android:text="@string/pool_load_more"
+		android:textColor="?attr/colorPrimary"
+		android:visibility="gone" />
+
+	<ProgressBar
+		android:id="@+id/progress"
+		android:layout_width="wrap_content"
+		android:layout_height="wrap_content"
+		android:layout_gravity="center_horizontal"
+		android:visibility="gone" />
+</LinearLayout>

@@ -28,6 +28,7 @@ import org.wastaken.kotatsu.api21.core.util.ext.resetTransformations
 import org.wastaken.kotatsu.api21.databinding.FragmentReaderPagerBinding
 import org.wastaken.kotatsu.api21.reader.domain.PageLoader
 import org.wastaken.kotatsu.api21.reader.ui.ReaderState
+import org.wastaken.kotatsu.api21.reader.ui.media.ReaderSharedMediaController
 import org.wastaken.kotatsu.api21.reader.ui.pager.standard.NoAnimPageTransformer
 import org.wastaken.kotatsu.api21.reader.ui.pager.standard.PageAnimTransformer
 import org.wastaken.kotatsu.api21.reader.ui.pager.standard.PageHolder
@@ -59,6 +60,8 @@ abstract class BasePagerReaderFragment : BaseReaderFragment<FragmentReaderPagerB
 		savedInstanceState: Bundle?,
 	) {
 		super.onViewBindingCreated(binding, savedInstanceState)
+		// paged readers let the resumed page's overlay self-drive auto-play
+		ReaderSharedMediaController.get(requireContext()).mode = ReaderSharedMediaController.Mode.PAGED
 		with(binding.pager) {
 			onInitPager(this)
 			doOnPageChanged(::notifyPageChanged)

@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	Square thumbnail tile for booru sources (see BooruGridItemAD).
+	Media indicators over the thumbnail (booru-only grid):
+	- "GIF" chip bottom-left for animated posts
+	- centered play button for video posts
+	- progress wheel while an inline GIF load runs (explicit, tap-triggered)
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto"
+	xmlns:tools="http://schemas.android.com/tools"
+	android:layout_width="match_parent"
+	android:layout_height="wrap_content"
+	android:layout_margin="2dp"
+	android:background="@drawable/custom_selectable_item_background"
+	android:clipChildren="false"
+	tools:layout_width="140dp">
+
+	<org.wastaken.kotatsu.api21.image.ui.CoverImageView
+		android:id="@+id/imageView_cover"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:background="?colorSurfaceContainer"
+		android:scaleType="centerCrop"
+		app:allowRgb565="true"
+		app:aspectRationHeight="1"
+		app:aspectRationWidth="1"
+		app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.Kotatsu.Cover"
+		tools:ignore="ContentDescription"
+		tools:src="@tools:sample/backgrounds/scenic[5]" />
+
+	<ImageView
+		android:id="@+id/videoIndicator"
+		android:layout_width="36dp"
+		android:layout_height="36dp"
+		android:layout_gravity="center"
+		android:alpha="0.85"
+		android:background="?colorSurfaceContainer"
+		android:contentDescription="@string/media_tap_play_in_app"
+		android:padding="5dp"
+		android:src="@drawable/ic_play"
+		android:visibility="gone" />
+
+	<TextView
+		android:id="@+id/gifBadge"
+		android:layout_width="wrap_content"
+		android:layout_height="wrap_content"
+		android:layout_gravity="bottom|start"
+		android:layout_margin="4dp"
+		android:background="?colorSurfaceContainer"
+		android:paddingStart="6dp"
+		android:paddingTop="2dp"
+		android:paddingEnd="6dp"
+		android:paddingBottom="2dp"
+		android:text="@string/media_gif_badge"
+		android:textAppearance="?attr/textAppearanceLabelMedium"
+		android:visibility="gone" />
+
+	<ProgressBar
+		android:id="@+id/gifProgress"
+		android:layout_width="32dp"
+		android:layout_height="32dp"
+		android:layout_gravity="center"
+		android:visibility="gone" />
+
+	<TextView
+		android:id="@+id/loadGifButton"
+		android:layout_width="wrap_content"
+		android:layout_height="wrap_content"
+		android:layout_gravity="center"
+		android:background="?colorSurfaceContainer"
+		android:clickable="true"
+		android:focusable="true"
+		android:paddingStart="12dp"
+		android:paddingTop="6dp"
+		android:paddingEnd="12dp"
+		android:paddingBottom="6dp"
+		android:text="@string/media_load_gif"
+		android:textAppearance="?attr/textAppearanceLabelLarge"
+		android:visibility="gone" />
+
+</FrameLayout>
